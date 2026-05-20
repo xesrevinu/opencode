@@ -8,6 +8,7 @@ import type { Agent } from "@/agent/agent"
 import type { MessageV2 } from "../message-v2"
 import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
+import { isOpenAI } from "@/provider/openai-cache"
 import { SystemPrompt } from "../system"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Effect, Record } from "effect"
@@ -54,10 +55,16 @@ const mergeOptions = (target: Record<string, any>, source: Record<string, any> |
   mergeDeep(target, source ?? {}) as Record<string, any>
 
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
-  const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
+  const openai = isOpenAI(input.model)
+  const gpt5 = openai && input.model.api.id.includes("gpt-5")
+  const isOpenaiOauth = openai && input.auth?.type === "oauth"
   const system = [
     [
-      ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
+      ...(input.agent.prompt
+            ? [input.agent.prompt]
+            : gpt5 && !isOpenaiOauth
+              ? []
+              : SystemPrompt.provider(input.model)),
       ...input.system,
       ...(input.user.system ? [input.user.system] : []),
     ]
@@ -86,9 +93,27 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     : ProviderTransform.options({
         model: input.model,
         sessionID: input.sessionID,
+        messages: openai ? input.messages : undefined,
         providerOptions: input.provider.options,
       })
   const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
+  const instructions = [
+    gpt5 ? SystemPrompt.instructions() : undefined,
+    isOpenaiOauth ? system.join("\n") : undefined,
+  ]
+    .filter((x): x is string => !!x)
+    .join("\n")
+  if (instructions) options.instructions = instructions
+  if (
+    !input.small &&
+    ["@ai-sdk/anthropic", "@ai-sdk/google-vertex/anthropic"].includes(input.model.api.npm) &&
+    input.user.model.variant &&
+    !options.effort &&
+    !(options.output_config && typeof options.output_config === "object" && "effort" in options.output_config)
+  ) {
+    const effort = input.user.model.variant === "xhigh" ? "max" : input.user.model.variant
+    if (["low", "medium", "high", "max"].includes(effort)) options.effort = effort
+  }
   if (
     input.model.api.npm === "@ai-sdk/azure" &&
     (input.provider.options.useCompletionUrls || input.model.options.useCompletionUrls || options.useCompletionUrls)
@@ -197,6 +222,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
             "x-session-affinity": input.sessionID,
             "X-Session-Id": input.sessionID,
             ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
+            ...(input.small ? { "x-opencode-small": "true" } : {}),
             "User-Agent": USER_AGENT,
           }),
       ...input.model.headers,

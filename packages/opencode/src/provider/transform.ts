@@ -4,6 +4,7 @@ import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
 import type * as ModelsDev from "@opencode-ai/core/models-dev"
 import { iife } from "@/util/iife"
+import { AnthropicClaudeCode } from "./anthropic-claude-code"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -333,8 +334,22 @@ function normalizeMessages(
 }
 
 function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
-  const system = msgs.filter((msg) => msg.role === "system").slice(0, 2)
-  const final = msgs.filter((msg) => msg.role !== "system").slice(-2)
+  const anthropicLike =
+    model.providerID.toLowerCase() === "anthropic" ||
+    model.providerID.toLowerCase() === "google-vertex-anthropic" ||
+    model.api.npm === "@ai-sdk/anthropic" ||
+    model.api.npm === "@ai-sdk/google-vertex/anthropic"
+  const ids = anthropicLike
+    ? selectAnthropicCacheBreakpoints(msgs)
+    : new Set(
+        unique([
+          ...msgs.filter((msg) => msg.role === "system").slice(0, 2),
+          ...msgs.filter((msg) => msg.role !== "system").slice(-2),
+        ]).flatMap((msg) => {
+          const idx = msgs.indexOf(msg)
+          return idx === -1 ? [] : [idx]
+        }),
+      )
 
   const providerOptions = {
     anthropic: {
@@ -357,11 +372,11 @@ function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage
     },
   }
 
-  for (const msg of unique([...system, ...final])) {
+  for (const idx of ids) {
+    const msg = msgs[idx]
+    if (!msg) continue
     const useMessageLevelOptions =
-      model.providerID === "anthropic" ||
-      model.providerID.includes("bedrock") ||
-      model.api.npm === "@ai-sdk/amazon-bedrock"
+      anthropicLike || model.providerID.includes("bedrock") || model.api.npm === "@ai-sdk/amazon-bedrock"
     const shouldUseContentOptions = !useMessageLevelOptions && Array.isArray(msg.content) && msg.content.length > 0
 
     if (shouldUseContentOptions) {
@@ -380,7 +395,40 @@ function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage
     msg.providerOptions = mergeDeep(msg.providerOptions ?? {}, providerOptions)
   }
 
+  if (anthropicLike && msgs.some((msg) => msg.role !== "system" && hasToolResultContent(msg.content))) {
+    const last = msgs.findLast((msg) => msg.role !== "system")
+    if (last && Array.isArray(last.content)) {
+      const lastPart = last.content.findLast(
+        (part) =>
+          typeof part === "object" &&
+          part.type !== "tool-approval-request" &&
+          part.type !== "tool-approval-response" &&
+          part.type !== "reasoning",
+      )
+      if (lastPart && "providerOptions" in lastPart)
+        lastPart.providerOptions = mergeDeep(lastPart.providerOptions ?? {}, providerOptions)
+    } else if (last && typeof last.content === "string") {
+      last.providerOptions = mergeDeep(last.providerOptions ?? {}, providerOptions)
+    }
+  }
+
   return msgs
+}
+
+function selectAnthropicCacheBreakpoints(msgs: ModelMessage[]): Set<number> {
+  const result = new Set<number>()
+  const lastSystem = msgs.findLastIndex((msg) => msg.role === "system")
+  if (lastSystem >= 0) result.add(lastSystem)
+  if (msgs.some((msg) => msg.role !== "system" && hasToolResultContent(msg.content))) {
+    const last = msgs.findLastIndex((msg) => msg.role !== "system")
+    if (last >= 0) result.add(last)
+  }
+  return result
+}
+
+function hasToolResultContent(content: ModelMessage["content"]): boolean {
+  if (!Array.isArray(content)) return false
+  return content.some((part) => typeof part === "object" && part.type === "tool-result")
 }
 
 function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
@@ -423,7 +471,7 @@ function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMes
 
 function mapProviderOptions(
   msgs: ModelMessage[],
-  transform: (options: Record<string, any> | undefined) => Record<string, any> | undefined,
+  transform: (options: Record<string, unknown> | undefined) => Record<string, unknown> | undefined,
 ) {
   return msgs.map((msg) => {
     if (!Array.isArray(msg.content)) return { ...msg, providerOptions: transform(msg.providerOptions) }
@@ -439,16 +487,25 @@ function mapProviderOptions(
   })
 }
 
-export function message(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>) {
+export function message(
+  msgs: ModelMessage[],
+  model: Provider.Model,
+  options: Record<string, unknown>,
+  _input?: { sessionID?: string; small?: boolean },
+) {
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
+  if (_input?.small) return msgs
+  const providerID = model.providerID.toLowerCase()
+  const apiID = model.api.id.toLowerCase()
+  const modelID = model.id.toLowerCase()
   if (
-    (model.providerID === "anthropic" ||
-      model.providerID === "google-vertex-anthropic" ||
-      model.api.id.includes("anthropic") ||
-      model.api.id.includes("claude") ||
-      model.id.includes("anthropic") ||
-      model.id.includes("claude") ||
+    (providerID === "anthropic" ||
+      providerID === "google-vertex-anthropic" ||
+      apiID.includes("anthropic") ||
+      apiID.includes("claude") ||
+      modelID.includes("anthropic") ||
+      modelID.includes("claude") ||
       model.api.npm === "@ai-sdk/anthropic" ||
       model.api.npm === "@ai-sdk/alibaba") &&
     model.api.npm !== "@ai-sdk/gateway"
@@ -1107,9 +1164,12 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
 export function options(input: {
   model: Provider.Model
   sessionID: string
+  messages?: ModelMessage[]
+  instructions?: string
   providerOptions?: Record<string, any>
 }): Record<string, any> {
   const result: Record<string, any> = {}
+  const openai = input.model.api.npm === "@ai-sdk/openai"
 
   if (
     input.model.api.npm === "@ai-sdk/google-vertex/anthropic" ||
@@ -1165,9 +1225,14 @@ export function options(input: {
     (input.model.providerID === "openai" ||
       input.model.api.npm === "@ai-sdk/openai" ||
       input.model.api.npm === "@ai-sdk/xai" ||
+      input.model.api.npm === "@ai-sdk/openai-compatible" ||
       input.providerOptions?.setCacheKey)
   ) {
     result["promptCacheKey"] = input.sessionID
+  }
+
+  if (openai && input.providerOptions?.promptCacheRetention) {
+    result["promptCacheRetention"] = input.providerOptions.promptCacheRetention
   }
 
   if (input.model.providerID === "meta" && input.model.api.npm === "@ai-sdk/openai") {
@@ -1237,6 +1302,10 @@ export function options(input: {
       if (input.model.api.npm === "@ai-sdk/openai" || input.model.api.npm === "@ai-sdk/amazon-bedrock/mantle") {
         result["include"] = INCLUDE_ENCRYPTED_REASONING
       }
+    }
+
+    if (openai) {
+      result["include"] = unique([...(result["include"] ?? []), "reasoning.encrypted_content"])
     }
 
     // Only set textVerbosity for non-chat gpt-5.x models
@@ -1360,6 +1429,27 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
   // "azure" first. Pass both so model options work on either code path.
   if (model.api.npm === "@ai-sdk/azure") {
     return { openai: normalized, azure: normalized }
+  }
+  if (model.api.npm === "@ai-sdk/anthropic") {
+    const anthropicOptions = { ...normalized }
+    if ("context_management" in anthropicOptions) {
+      anthropicOptions.contextManagement = anthropicOptions.context_management
+      delete anthropicOptions.context_management
+    }
+    if ("output_config" in anthropicOptions) {
+      const outputConfig = anthropicOptions.output_config
+      if (outputConfig && typeof outputConfig === "object" && !Array.isArray(outputConfig)) {
+        const output = outputConfig as Record<string, unknown>
+        if (typeof output.effort === "string") anthropicOptions.effort = output.effort
+        if (output.task_budget !== undefined) anthropicOptions.taskBudget = output.task_budget
+      }
+      delete anthropicOptions.output_config
+    }
+    const opencode = AnthropicClaudeCode.extractBodyFields(normalized)
+    return {
+      [key]: anthropicOptions,
+      ...(Object.keys(opencode).length > 0 ? { opencode } : {}),
+    }
   }
   return { [key]: normalized }
 }

@@ -31,6 +31,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { AnthropicClaudeCode } from "./anthropic-claude-code"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000
 
@@ -1724,6 +1725,7 @@ const layer = Layer.effect(
             providerID: model.providerID,
             npm: model.api.npm,
             options,
+            isAnthropicOAuth: model.providerID.toLowerCase().includes("anthropic"),
           }),
         )
         const existing = s.sdk.get(key)
@@ -1742,6 +1744,7 @@ const layer = Layer.effect(
           const headerTimeoutMs = headerTimeout === false ? undefined : headerTimeout
           const headerTimeoutCtl = typeof headerTimeoutMs === "number" ? timeoutController(headerTimeoutMs) : undefined
           const signals: AbortSignal[] = []
+          const isAnthropicOAuth = model.providerID.toLowerCase().includes("anthropic")
 
           if (opts.signal) signals.push(opts.signal)
           if (chunkAbortCtl) signals.push(chunkAbortCtl.signal)
@@ -1751,6 +1754,149 @@ const layer = Layer.effect(
 
           const combined = signals.length === 0 ? null : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
           if (combined) opts.signal = combined
+
+          let bodyObj: any = null
+          if (opts.body) {
+            try {
+              bodyObj = JSON.parse(opts.body as string)
+            } catch {
+              bodyObj = null
+            }
+          }
+
+          if (isAnthropicOAuth && bodyObj) {
+            const requestHeaders = new Headers(opts.headers)
+            const sessionID = requestHeaders.get("x-session-affinity") ?? model.providerID
+            const smallRequest = requestHeaders.get("x-opencode-small") === "true"
+            const requiredHeader = "You are Claude Code, Anthropic's official CLI for Claude."
+            const localHeader = "You are Claude Code, the best coding agent on the planet."
+            AnthropicClaudeCode.applyHeaders(requestHeaders, { sessionID, body: bodyObj })
+            requestHeaders.delete("x-opencode-small")
+
+            if (Array.isArray(bodyObj.system)) {
+              if (
+                !smallRequest &&
+                !bodyObj.system.some((item: any) => item.type === "text" && item.text === AnthropicClaudeCode.IDENTITY)
+              ) {
+                bodyObj.system.unshift({
+                  type: "text",
+                  text: AnthropicClaudeCode.IDENTITY,
+                  cache_control: { type: "ephemeral" },
+                })
+              }
+              bodyObj.system = bodyObj.system
+                .map((item: any) => {
+                  if (item.type !== "text" || !item.text) return item
+                  const text = item.text
+                    .replaceAll(localHeader, "")
+                    .replaceAll(requiredHeader, "")
+                    .replace(/OpenCode/g, "Claude Code")
+                    .replace(/opencode/gi, "Claude")
+                    .trim()
+                  return { ...item, text }
+                })
+                .filter((item: any) => item.type !== "text" || item.text?.trim())
+              if (smallRequest) {
+                bodyObj.system = bodyObj.system.map((item: any) => {
+                  if (!item || typeof item !== "object" || Array.isArray(item)) return item
+                  const { cache_control, ...rest } = item
+                  return rest
+                })
+              }
+            }
+            if (smallRequest && Array.isArray(bodyObj.messages)) bodyObj.messages = AnthropicClaudeCode.stripMessageCache(bodyObj.messages)
+            if (Array.isArray(bodyObj.tools)) {
+              bodyObj.tools = bodyObj.tools.map((tool: any) => ({
+                ...tool,
+                name: tool.name ? AnthropicClaudeCode.prefixName(tool.name) : tool.name,
+              }))
+            }
+
+            if (Array.isArray(bodyObj.messages)) {
+              bodyObj.messages = bodyObj.messages.map((msg: any) => {
+                if (!Array.isArray(msg.content)) return msg
+                return {
+                  ...msg,
+                  content: msg.content.map((block: any) =>
+                    block.type === "tool_use" && block.name
+                      ? { ...block, name: AnthropicClaudeCode.prefixName(block.name) }
+                      : block,
+                  ),
+                }
+              })
+            }
+
+            const opencodeOptions = bodyObj.provider_metadata?.opencode
+            if (opencodeOptions && typeof opencodeOptions === "object" && !Array.isArray(opencodeOptions)) {
+              Object.assign(bodyObj, AnthropicClaudeCode.extractBodyFields(opencodeOptions))
+            }
+            delete bodyObj.provider_metadata?.opencode
+            if (bodyObj.provider_metadata && Object.keys(bodyObj.provider_metadata).length === 0) delete bodyObj.provider_metadata
+
+            AnthropicClaudeCode.applyMetadata(bodyObj, sessionID)
+
+            let requestInput = input
+            try {
+              const requestUrl = new URL(input instanceof Request ? input.url : input.toString())
+              if (requestUrl.pathname === "/v1/messages" && !requestUrl.searchParams.has("beta")) {
+                requestUrl.searchParams.set("beta", "true")
+                requestInput = input instanceof Request ? new Request(requestUrl.toString(), input) : requestUrl
+              }
+            } catch {}
+
+            bodyObj = AnthropicClaudeCode.orderBody(bodyObj)
+
+            const response = await fetchFn(requestInput, {
+              ...opts,
+              body: JSON.stringify(bodyObj),
+              headers: requestHeaders,
+              // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
+              timeout: false,
+            })
+
+            if (!response.body) {
+              return response
+            }
+
+            const reader = response.body.getReader()
+            const decoder = new TextDecoder()
+            const encoder = new TextEncoder()
+            const stream = new ReadableStream({
+              async pull(controller) {
+                const { done, value } = await reader.read()
+                if (done) {
+                  controller.close()
+                  return
+                }
+                const text = decoder.decode(value, { stream: true }).replace(/"name"\s*:\s*"mcp_([^"]+)"/g, (_match, name) => `"name": "${AnthropicClaudeCode.unprefixName(name)}"`)
+                controller.enqueue(encoder.encode(text))
+              },
+            })
+
+            return new Response(stream, {
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+            })
+          }
+
+          // Strip openai itemId metadata following what codex does
+          if (
+            (model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure") &&
+            opts.body &&
+            opts.method === "POST"
+          ) {
+            const body = JSON.parse(opts.body as string)
+            const keepIds = body.store === true
+            if (!keepIds && Array.isArray(body.input)) {
+              for (const item of body.input) {
+                if ("id" in item) {
+                  delete item.id
+                }
+              }
+              opts.body = JSON.stringify(body)
+            }
+          }
 
           const res = await fetchFn(input, {
             ...opts,

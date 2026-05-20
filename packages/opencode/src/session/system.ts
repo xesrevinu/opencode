@@ -41,6 +41,10 @@ export function provider(model: Provider.Model) {
   return [PROMPT_DEFAULT]
 }
 
+export function instructions() {
+  return PROMPT_CODEX
+}
+
 export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
@@ -71,7 +75,6 @@ const layer = Layer.effect(
             `  Workspace root folder: ${ctx.worktree}`,
             `  Is directory a git repo: ${ctx.project.vcs === "git" ? "yes" : "no"}`,
             `  Platform: ${process.platform}`,
-            `  Today's date: ${new Date().toDateString()}`,
             `</env>`,
           ].join("\n"),
           references.length === 0

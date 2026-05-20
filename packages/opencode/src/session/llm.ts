@@ -102,6 +102,7 @@ const live: Layer.Layer<
         { concurrency: "unbounded" },
       )
 
+
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
       const prepared = yield* LLMRequestPrep.prepare({
         ...input,
@@ -238,6 +239,7 @@ const live: Layer.Layer<
           maxOutputTokens: prepared.params.maxOutputTokens,
           providerOptions: prepared.params.options,
           headers: prepared.headers,
+          small: input.small,
           abort: input.abort,
         })
         if (native.type === "supported") {
@@ -334,6 +336,7 @@ const live: Layer.Layer<
                       args.params.prompt,
                       input.model,
                       prepared.messageTransformOptions,
+                      { sessionID: input.sessionID, small: input.small },
                     )
                   }
                   return args.params

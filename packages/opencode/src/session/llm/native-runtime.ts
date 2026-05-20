@@ -41,6 +41,7 @@ type StreamInput = {
   readonly providerOptions?: Record<string, any>
   readonly headers: Record<string, string>
   readonly abort: AbortSignal
+  readonly small?: boolean
 }
 
 export function status(input: Pick<StreamInput, "model" | "provider" | "auth">): RuntimeStatus {
@@ -91,7 +92,7 @@ export function stream(input: StreamInput): StreamResult {
     model: input.model,
     apiKey: current.apiKey,
     baseURL: current.baseURL,
-    messages: ProviderTransform.message(input.messages, input.model, input.providerOptions ?? {}),
+    messages: ProviderTransform.message(input.messages, input.model, input.providerOptions ?? {}, { small: input.small }),
     toolChoice: input.toolChoice,
     temperature: input.temperature,
     topP: input.topP,

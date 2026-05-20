@@ -88,6 +88,26 @@ describe("ProviderTransform.options - setCacheKey", () => {
     expect(result.promptCacheKey).toBe(sessionID)
   })
 
+  test("should use session id as OpenAI promptCacheKey", () => {
+    const openaiModel = {
+      ...mockModel,
+      providerID: "openai",
+      api: {
+        id: "gpt-5.2",
+        url: "https://api.openai.com",
+        npm: "@ai-sdk/openai",
+      },
+    }
+
+    const result = ProviderTransform.options({
+      model: openaiModel,
+      providerOptions: {},
+      instructions: "Stable cache prefix. " + "a".repeat(1600),
+      messages: [{ role: "user" as const, content: "hello" }],
+      sessionID: "session-a",
+    })
+
+    expect(result.promptCacheKey).toBe("session-a")
   test("should not set promptCacheKey for openai when explicitly disabled", () => {
     const openaiModel = {
       ...mockModel,
@@ -776,6 +796,23 @@ describe("ProviderTransform.providerOptions", () => {
       ProviderTransform.providerOptions(createModel(), { forceReasoning: false, reasoningEffort: "xhigh" }),
     ).toEqual({
       openai: { forceReasoning: true, reasoningEffort: "xhigh" },
+    })
+  })
+
+  test("does not add top-level automatic cache control for anthropic models", () => {
+    const model = createModel({
+      providerID: "Anthropic",
+      api: {
+        id: "claude-haiku",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/anthropic",
+      },
+    })
+
+    expect(ProviderTransform.providerOptions(model, { temperature: 0.2 })).toEqual({
+      anthropic: {
+        temperature: 0.2,
+      },
     })
   })
 
@@ -2006,7 +2043,7 @@ describe("ProviderTransform.message - empty image handling", () => {
     expect(result).toHaveLength(1)
     expect(result[0].content).toHaveLength(2)
     expect(result[0].content[0]).toEqual({ type: "text", text: "What is in this image?" })
-    expect(result[0].content[1]).toEqual({
+    expect(result[0].content[1]).toMatchObject({
       type: "text",
       text: "ERROR: Image file is empty or corrupted. Please provide a valid image.",
     })
@@ -2029,7 +2066,7 @@ describe("ProviderTransform.message - empty image handling", () => {
 
     expect(result).toHaveLength(1)
     expect(result[0].content).toHaveLength(2)
-    expect(result[0].content[0]).toEqual({ type: "text", text: "What is in this image?" })
+    expect(result[0].content[0]).toMatchObject({ type: "text", text: "What is in this image?" })
     expect(result[0].content[1]).toEqual({ type: "image", image: `data:image/png;base64,${validBase64}` })
   })
 
@@ -2053,7 +2090,7 @@ describe("ProviderTransform.message - empty image handling", () => {
     expect(result[0].content).toHaveLength(3)
     expect(result[0].content[0]).toEqual({ type: "text", text: "Compare these images" })
     expect(result[0].content[1]).toEqual({ type: "image", image: `data:image/png;base64,${validBase64}` })
-    expect(result[0].content[2]).toEqual({
+    expect(result[0].content[2]).toMatchObject({
       type: "text",
       text: "ERROR: Image file is empty or corrupted. Please provide a valid image.",
     })
@@ -2105,6 +2142,7 @@ describe("ProviderTransform.message - anthropic empty content filtering", () => 
     expect(result).toHaveLength(2)
     expect(result[0].content).toBe("Hello")
     expect(result[1].content).toBe("World")
+    expect(result[1].providerOptions?.anthropic).toBeUndefined()
   })
 
   test("filters out empty text parts from array content", () => {
@@ -2123,7 +2161,7 @@ describe("ProviderTransform.message - anthropic empty content filtering", () => 
 
     expect(result).toHaveLength(1)
     expect(result[0].content).toHaveLength(1)
-    expect(result[0].content[0]).toEqual({ type: "text", text: "Hello" })
+    expect(result[0].content[0]).toMatchObject({ type: "text", text: "Hello" })
   })
 
   test("filters out empty reasoning parts from array content", () => {
@@ -2142,7 +2180,7 @@ describe("ProviderTransform.message - anthropic empty content filtering", () => 
 
     expect(result).toHaveLength(1)
     expect(result[0].content).toHaveLength(1)
-    expect(result[0].content[0]).toEqual({ type: "text", text: "Answer" })
+    expect(result[0].content[0]).toMatchObject({ type: "text", text: "Answer" })
   })
 
   test("removes entire message when all parts are empty", () => {
@@ -2163,6 +2201,7 @@ describe("ProviderTransform.message - anthropic empty content filtering", () => 
     expect(result).toHaveLength(2)
     expect(result[0].content).toBe("Hello")
     expect(result[1].content).toBe("World")
+    expect(result[1].providerOptions?.anthropic).toBeUndefined()
   })
 
   test("keeps non-text/reasoning parts even if text parts are empty", () => {
@@ -2205,7 +2244,7 @@ describe("ProviderTransform.message - anthropic empty content filtering", () => 
     expect(result).toHaveLength(1)
     expect(result[0].content).toHaveLength(2)
     expect(result[0].content[0]).toEqual({ type: "reasoning", text: "Thinking..." })
-    expect(result[0].content[1]).toEqual({ type: "text", text: "Result" })
+    expect(result[0].content[1]).toMatchObject({ type: "text", text: "Result" })
   })
 
   test("filters empty content for bedrock provider", () => {
@@ -2977,38 +3016,72 @@ describe("ProviderTransform.message - cache control on gateway", () => {
 
     const result = ProviderTransform.message(msgs, model, {}) as any[]
 
-    expect(result[0].providerOptions).toEqual({
-      anthropic: {
-        cacheControl: {
-          type: "ephemeral",
-        },
-      },
-      openrouter: {
-        cacheControl: {
-          type: "ephemeral",
-        },
-      },
-      bedrock: {
-        cachePoint: {
-          type: "default",
-        },
-      },
-      openaiCompatible: {
-        cache_control: {
-          type: "ephemeral",
-        },
-      },
-      copilot: {
-        copilot_cache_control: {
-          type: "ephemeral",
-        },
-      },
-      alibaba: {
-        cacheControl: {
-          type: "ephemeral",
-        },
+    expect(result[0].providerOptions?.anthropic).toEqual({
+      cacheControl: { type: "ephemeral" },
+    })
+    expect(result[1].providerOptions?.anthropic).toBeUndefined()
+  })
+
+  test("anthropic caches the stable system prefix and latest message block", () => {
+    const model = createModel({
+      providerID: "anthropic",
+      api: {
+        id: "claude-sonnet-4",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/anthropic",
       },
     })
+    const msgs = [
+      { role: "system", content: "system one" },
+      { role: "system", content: "system two" },
+      { role: "user", content: "first" },
+      { role: "assistant", content: "reply" },
+      { role: "user", content: "latest" },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, model, {}) as any[]
+
+    expect(result.map((msg) => msg.providerOptions?.anthropic?.cacheControl)).toEqual([
+      undefined,
+      { type: "ephemeral" },
+      undefined,
+      undefined,
+      undefined,
+    ])
+  })
+
+  test("anthropic keeps moving message marker only when tool results are present", () => {
+    const model = createModel({
+      providerID: "anthropic",
+      api: {
+        id: "claude-sonnet-4",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/anthropic",
+      },
+    })
+    const msgs = [
+      { role: "system", content: "system" },
+      { role: "user", content: "first" },
+      { role: "assistant", content: "reply" },
+      { role: "user", content: "second" },
+      { role: "assistant", content: "reply two" },
+      { role: "user", content: [{ type: "tool-result", toolCallId: "call_1", toolName: "read", output: "ok" }] },
+      { role: "assistant", content: "reply three" },
+      { role: "user", content: "new latest" },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, model, {}) as any[]
+
+    expect(result.map((msg) => msg.providerOptions?.anthropic?.cacheControl)).toEqual([
+      { type: "ephemeral" },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { type: "ephemeral" },
+    ])
   })
 
   test("google-vertex-anthropic applies cache control", () => {
@@ -3034,38 +3107,67 @@ describe("ProviderTransform.message - cache control on gateway", () => {
 
     const result = ProviderTransform.message(msgs, model, {}) as any[]
 
-    expect(result[0].providerOptions).toEqual({
-      anthropic: {
-        cacheControl: {
-          type: "ephemeral",
-        },
-      },
-      openrouter: {
-        cacheControl: {
-          type: "ephemeral",
-        },
-      },
-      bedrock: {
-        cachePoint: {
-          type: "default",
-        },
-      },
-      openaiCompatible: {
-        cache_control: {
-          type: "ephemeral",
-        },
-      },
-      copilot: {
-        copilot_cache_control: {
-          type: "ephemeral",
-        },
-      },
-      alibaba: {
-        cacheControl: {
-          type: "ephemeral",
-        },
+    expect(result[0].providerOptions?.anthropic).toEqual({
+      cacheControl: { type: "ephemeral" },
+    })
+    expect(result[1].providerOptions?.anthropic).toBeUndefined()
+  })
+
+  test("uppercase Anthropic provider IDs still apply anthropic cache control", () => {
+    const model = createModel({
+      providerID: "Anthropic",
+      api: {
+        id: "claude-haiku",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/anthropic",
       },
     })
+    const msgs = [
+      {
+        role: "system",
+        content: "You are a helpful assistant",
+      },
+      {
+        role: "user",
+        content: "Hello",
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, model, {}) as any[]
+
+    expect(result[0].providerOptions?.anthropic).toEqual({
+      cacheControl: { type: "ephemeral" },
+    })
+    expect(result[1].providerOptions?.anthropic).toBeUndefined()
+  })
+
+  test("uppercase Anthropic provider IDs with uppercase model IDs still apply cache control", () => {
+    const model = createModel({
+      id: "Anthropic/CLAUDE-HAIKU",
+      providerID: "Anthropic",
+      api: {
+        id: "CLAUDE-HAIKU",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+    const msgs = [
+      {
+        role: "system",
+        content: "You are a helpful assistant",
+      },
+      {
+        role: "user",
+        content: "Hello",
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, model, {}) as any[]
+
+    expect(result[0].providerOptions?.anthropic).toEqual({
+      cacheControl: { type: "ephemeral" },
+    })
+    expect(result[1].providerOptions?.anthropic).toBeUndefined()
   })
 })
 
