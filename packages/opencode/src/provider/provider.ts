@@ -32,6 +32,7 @@ import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
 import { AnthropicClaudeCode } from "./anthropic-claude-code"
+import { patchOpenAIBody, summarizeOpenAIBody, openAICacheDebug } from "./openai-cache"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000
 
@@ -1897,6 +1898,19 @@ const layer = Layer.effect(
               opts.body = JSON.stringify(body)
             }
           }
+          // OpenAI prompt caching: inject prompt_cache_key and session_id for sticky routing
+          if (model.api.npm === "@ai-sdk/openai" && opts.body && opts.method === "POST") {
+            const requestHeaders = new Headers(opts.headers)
+            const sessionID = requestHeaders.get("x-session-affinity")
+            opts.body = patchOpenAIBody(opts.body as string, opts.headers, model.api.id)
+            if (sessionID) requestHeaders.set("session_id", sessionID)
+            if (openAICacheDebug()) {
+              const summary = summarizeOpenAIBody(opts.body as string)
+              log.info("openai cache debug", { ...summary })
+            }
+            opts.headers = requestHeaders
+          }
+
 
           const res = await fetchFn(input, {
             ...opts,
