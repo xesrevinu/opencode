@@ -1898,16 +1898,36 @@ const layer = Layer.effect(
               opts.body = JSON.stringify(body)
             }
           }
-          // OpenAI prompt caching: inject prompt_cache_key and session_id for sticky routing
+          // OpenAI: emulate Codex CLI headers for sub2api compatibility + prompt caching
           if (model.api.npm === "@ai-sdk/openai" && opts.body && opts.method === "POST") {
             const requestHeaders = new Headers(opts.headers)
             const sessionID = requestHeaders.get("x-session-affinity")
+
+            // Codex-style identity headers
+            requestHeaders.set("user-agent", "codex_cli_rs/0.125.0")
+            if (!requestHeaders.has("originator")) requestHeaders.set("originator", "codex_cli_rs")
+            if (!requestHeaders.has("OpenAI-Beta")) requestHeaders.set("OpenAI-Beta", "responses=experimental")
+            if (!requestHeaders.has("accept")) requestHeaders.set("accept", "text/event-stream")
+            if (!requestHeaders.has("content-type")) requestHeaders.set("content-type", "application/json")
+
+            // Session sticky routing
+            if (sessionID) {
+              requestHeaders.set("session_id", sessionID)
+              requestHeaders.set("conversation_id", sessionID)
+            }
+
+            // Prompt cache key injection
             opts.body = patchOpenAIBody(opts.body as string, opts.headers, model.api.id)
-            if (sessionID) requestHeaders.set("session_id", sessionID)
+
             if (openAICacheDebug()) {
               const summary = summarizeOpenAIBody(opts.body as string)
               log.info("openai cache debug", { ...summary })
             }
+
+            // Clean internal headers before sending upstream
+            requestHeaders.delete("x-session-affinity")
+            requestHeaders.delete("x-opencode-small")
+            requestHeaders.delete("x-parent-session-id")
             opts.headers = requestHeaders
           }
 
