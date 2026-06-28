@@ -14,7 +14,6 @@ import {
   setCustomThemes,
   setSystemTheme,
   subscribeThemes,
-  terminalMode,
   tint,
   upsertTheme,
   type ThemeJson,
@@ -80,7 +79,6 @@ export {
 } from "../theme"
 
 const THEME_REFRESH_DELAYS = [250, 1000] as const
-
 type State = {
   themes: Record<string, ThemeJson>
   mode: "dark" | "light"
@@ -110,7 +108,6 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       if (value === "dark" || value === "light") return value
       return
     }
-
     setStore(
       produce((draft) => {
         const lock = pick(kv.get("theme_mode_lock"))
@@ -162,7 +159,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
             if (store.active === "system") setStore("active", "opencode")
             return
           }
-          const next = store.lock ?? terminalMode(colors) ?? mode
+          const next = store.lock ?? mode
           if (store.mode !== next) setStore("mode", next)
           const signature = JSON.stringify(colors)
           hasResolvedSystemTheme = true
@@ -227,10 +224,20 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
 
     const handleThemeNotification = (sequence: string) => {
       if (sequence !== "\x1b[?997;1n" && sequence !== "\x1b[?997;2n") return false
-      queueMicrotask(() => refreshSystemTheme())
+      const mode = sequence.endsWith(";1n") ? "dark" : "light"
+      queueMicrotask(() => {
+        handle(mode)
+        refreshSystemTheme(mode)
+      })
       return false
     }
     renderer.prependInputHandler(handleThemeNotification)
+
+    const stopMacOSThemeMode = startMacOSThemeModeWatcher((mode) => {
+      if (store.lock) return
+      handle(mode)
+      refreshSystemTheme(mode)
+    })
 
     let themeRefreshTimeouts: ReturnType<typeof setTimeout>[] = []
     const refresh = () => {
@@ -248,6 +255,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     onCleanup(() => {
       renderer.off(CliRenderEvents.THEME_MODE, handle)
       renderer.removeInputHandler(handleThemeNotification)
+      stopMacOSThemeMode?.()
       unsubscribeRefresh?.()
       for (const timeout of themeRefreshTimeouts) clearTimeout(timeout)
       themeRefreshTimeouts.length = 0
@@ -330,3 +338,59 @@ export function createSyntaxStyleMemo(factory: () => SyntaxStyle) {
     return current
   })
 }
+
+function startMacOSThemeModeWatcher(onMode: (mode: "dark" | "light") => void) {
+  if (process.platform !== "darwin") return
+  if (process.env.OPENCODE_DISABLE_MACOS_THEME_WATCHER === "1") return
+
+  const proc = Bun.spawn(["/usr/bin/swift", "-e", MACOS_THEME_MODE_SWIFT], {
+    stdout: "pipe",
+    stderr: "ignore",
+  })
+  let active = true
+  let buffer = ""
+  const reader = proc.stdout.getReader()
+  const decoder = new TextDecoder()
+
+  void (async () => {
+    while (active) {
+      const next = await reader.read().catch(() => undefined)
+      if (!next || next.done) return
+      buffer += decoder.decode(next.value, { stream: true })
+      const lines = buffer.split("\n")
+      buffer = lines.pop() ?? ""
+      for (const line of lines) {
+        const mode = line.trim()
+        if (mode === "dark" || mode === "light") onMode(mode)
+      }
+    }
+  })()
+
+  return () => {
+    active = false
+    reader.cancel().catch(() => {})
+    proc.kill()
+  }
+}
+
+const MACOS_THEME_MODE_SWIFT = `
+import AppKit
+
+func mode() -> String {
+  UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark" ? "dark" : "light"
+}
+
+print(mode())
+fflush(stdout)
+
+DistributedNotificationCenter.default().addObserver(
+  forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+  object: nil,
+  queue: nil
+) { _ in
+  print(mode())
+  fflush(stdout)
+}
+
+RunLoop.main.run()
+`
