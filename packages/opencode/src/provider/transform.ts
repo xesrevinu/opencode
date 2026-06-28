@@ -1,4 +1,5 @@
 import type { ModelMessage, ToolResultPart } from "ai"
+import type { SharedV3ProviderOptions } from "@ai-sdk/provider"
 import { mergeDeep, unique } from "remeda"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
@@ -471,7 +472,7 @@ function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMes
 
 function mapProviderOptions(
   msgs: ModelMessage[],
-  transform: (options: Record<string, unknown> | undefined) => Record<string, unknown> | undefined,
+  transform: (options: SharedV3ProviderOptions | undefined) => SharedV3ProviderOptions | undefined,
 ) {
   return msgs.map((msg) => {
     if (!Array.isArray(msg.content)) return { ...msg, providerOptions: transform(msg.providerOptions) }
@@ -516,7 +517,7 @@ export function message(
   // Remap providerOptions keys from stored providerID to expected SDK key
   const key = sdkKey(model.api.npm)
   if (key && key !== model.providerID) {
-    const remap = (opts: Record<string, any> | undefined) => {
+    const remap = (opts: SharedV3ProviderOptions | undefined) => {
       if (!opts) return opts
       if (!(model.providerID in opts)) return opts
       const result = { ...opts }
@@ -537,10 +538,11 @@ export function message(
     )
   ) {
     msgs = mapProviderOptions(msgs, (options) => {
-      if (!options?.[key] || !("itemId" in options[key])) return options
-      const metadata = { ...options[key] }
-      delete metadata.itemId
-      return { ...options, [key]: metadata }
+      const metadata = options?.[key]
+      if (!metadata || typeof metadata !== "object" || !("itemId" in metadata)) return options
+      const next = { ...metadata }
+      delete next.itemId
+      return { ...options, [key]: next }
     })
   }
 

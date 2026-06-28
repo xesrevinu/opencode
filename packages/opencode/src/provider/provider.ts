@@ -1921,7 +1921,7 @@ const layer = Layer.effect(
 
             if (openAICacheDebug()) {
               const summary = summarizeOpenAIBody(opts.body as string)
-              log.info("openai cache debug", { ...summary })
+              console.error("openai cache debug", summary)
             }
 
             // Clean internal headers before sending upstream
