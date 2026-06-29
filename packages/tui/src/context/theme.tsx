@@ -153,14 +153,14 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       return renderer
         .getPalette({ size: 16 })
         .then((colors: TerminalColors) => {
+          const next = store.lock ?? mode
+          if (store.mode !== next) setStore("mode", next)
           if (!colors.palette[0]) {
             if (hasResolvedSystemTheme) return
             setSystemTheme(undefined)
             if (store.active === "system") setStore("active", "opencode")
             return
           }
-          const next = store.lock ?? mode
-          if (store.mode !== next) setStore("mode", next)
           const signature = JSON.stringify(colors)
           hasResolvedSystemTheme = true
           if (store.themes.system && systemThemeSignature === signature && systemThemeMode === next) return
@@ -179,6 +179,8 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     let systemRefreshQueued = false
     let systemRefreshMode = store.mode
     function refreshSystemTheme(mode: "dark" | "light" = store.mode) {
+      const next = store.lock ?? mode
+      if (store.mode !== next) setStore("mode", next)
       systemRefreshMode = mode
       if (systemRefreshRunning) {
         systemRefreshQueued = true
