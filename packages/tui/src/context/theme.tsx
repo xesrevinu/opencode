@@ -224,13 +224,22 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     }
     renderer.on(CliRenderEvents.THEME_MODE, handle)
 
+    const writeOut = (sequence: string) => {
+      const writer = (renderer as unknown as { writeOut?: (sequence: string) => void }).writeOut
+      writer?.call(renderer, sequence)
+    }
+    writeOut("\x1b[?2031h\x1b[?996n")
+
     const handleThemeNotification = (sequence: string) => {
-      if (sequence !== "\x1b[?997;1n" && sequence !== "\x1b[?997;2n") return false
+      if (
+        sequence !== "\x1b[?996;1n" &&
+        sequence !== "\x1b[?996;2n" &&
+        sequence !== "\x1b[?997;1n" &&
+        sequence !== "\x1b[?997;2n"
+      )
+        return false
       const mode = sequence.endsWith(";1n") ? "dark" : "light"
-      queueMicrotask(() => {
-        handle(mode)
-        refreshSystemTheme(mode)
-      })
+      queueMicrotask(() => handle(mode))
       return false
     }
     renderer.prependInputHandler(handleThemeNotification)
@@ -238,7 +247,6 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const stopMacOSThemeMode = startMacOSThemeModeWatcher((mode) => {
       if (store.lock) return
       handle(mode)
-      refreshSystemTheme(mode)
     })
 
     let themeRefreshTimeouts: ReturnType<typeof setTimeout>[] = []
@@ -256,6 +264,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
 
     onCleanup(() => {
       renderer.off(CliRenderEvents.THEME_MODE, handle)
+      writeOut("\x1b[?2031l")
       renderer.removeInputHandler(handleThemeNotification)
       stopMacOSThemeMode?.()
       unsubscribeRefresh?.()
@@ -346,6 +355,7 @@ function startMacOSThemeModeWatcher(onMode: (mode: "dark" | "light") => void) {
   if (process.env.OPENCODE_DISABLE_MACOS_THEME_WATCHER === "1") return
 
   const proc = Bun.spawn(["/usr/bin/swift", "-e", MACOS_THEME_MODE_SWIFT], {
+    env: macOSSwiftEnv(),
     stdout: "pipe",
     stderr: "ignore",
   })
@@ -373,6 +383,19 @@ function startMacOSThemeModeWatcher(onMode: (mode: "dark" | "light") => void) {
     reader.cancel().catch(() => {})
     proc.kill()
   }
+}
+
+function macOSSwiftEnv() {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => {
+      if (key === "SDKROOT" || key === "DEVELOPER_DIR" || key === "TOOLCHAINS") return false
+      if (key === "CPATH" || key === "C_INCLUDE_PATH" || key === "CPLUS_INCLUDE_PATH" || key === "LIBRARY_PATH") return false
+      if (key === "DYLD_LIBRARY_PATH" || key === "DYLD_FRAMEWORK_PATH") return false
+      if (key.startsWith("SWIFT_")) return false
+      if (key.startsWith("NIX_")) return false
+      return true
+    }),
+  )
 }
 
 const MACOS_THEME_MODE_SWIFT = `
