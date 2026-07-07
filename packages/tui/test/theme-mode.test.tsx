@@ -21,7 +21,12 @@ async function wait(fn: () => boolean, timeout = 2000) {
   }
 }
 
-async function mountTheme(input: { root: string; initialMode: "dark" | "light"; seen: string[] }) {
+async function mountTheme(input: {
+  root: string
+  initialMode: "dark" | "light"
+  seen: string[]
+  stallPalette?: boolean
+}) {
   const state = path.join(input.root, "state")
   await mkdir(state, { recursive: true })
   await Bun.write(path.join(state, "kv.json"), JSON.stringify({ theme: "tokyonight" }))
@@ -40,6 +45,9 @@ async function mountTheme(input: { root: string; initialMode: "dark" | "light"; 
 
   function Harness() {
     const renderer = useRenderer() as unknown as EventEmitter & { themeMode: "dark" | "light" | null }
+    if (input.stallPalette) {
+      ;(renderer as typeof renderer & { getPalette: () => Promise<never> }).getPalette = () => new Promise(() => {})
+    }
     return (
       <TestTuiContexts
         directory={input.root}
@@ -98,6 +106,19 @@ test("theme provider follows raw Mode 2031 notifications", async () => {
 
     await wait(() => seen.includes("light"))
     expect(seen.at(-1)).toBe("light")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("theme provider does not block startup when palette detection hangs", async () => {
+  await using tmp = await tmpdir()
+  const seen: string[] = []
+  const app = await mountTheme({ root: tmp.path, initialMode: "dark", seen, stallPalette: true })
+
+  try {
+    await wait(() => seen.includes("dark"))
+    expect(seen.at(-1)).toBe("dark")
   } finally {
     app.cleanup()
   }

@@ -79,6 +79,7 @@ export {
 } from "../theme"
 
 const THEME_REFRESH_DELAYS = [250, 1000] as const
+const THEME_READY_TIMEOUT = 300
 type State = {
   themes: Record<string, ThemeJson>
   mode: "dark" | "light"
@@ -141,7 +142,10 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     }
 
     onMount(() => {
-      void Promise.allSettled([resolveSystemTheme(store.mode), syncCustomThemes()]).finally(() => {
+      const timeout = new Promise<void>((resolve) => {
+        setTimeout(resolve, THEME_READY_TIMEOUT).unref()
+      })
+      void Promise.race([Promise.allSettled([resolveSystemTheme(store.mode), syncCustomThemes()]), timeout]).finally(() => {
         setStore("ready", true)
       })
     })
