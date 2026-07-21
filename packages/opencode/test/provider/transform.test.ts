@@ -108,6 +108,8 @@ describe("ProviderTransform.options - setCacheKey", () => {
     })
 
     expect(result.promptCacheKey).toBe("session-a")
+  })
+
   test("should not set promptCacheKey for openai when explicitly disabled", () => {
     const openaiModel = {
       ...mockModel,
