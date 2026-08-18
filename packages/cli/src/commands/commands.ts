@@ -431,6 +431,38 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
         }),
       ],
     }),
+    Spec.make("sessions", {
+      description: "Read-only TUI for browsing local coding-agent sessions",
+      params: {
+        agent: Flag.string("agent").pipe(
+          Flag.withDescription("Filter by agent: opencode, codex, pi, grok, claude"),
+          Flag.optional,
+        ),
+        live: Flag.boolean("live").pipe(Flag.withDescription("Show only live sessions"), Flag.withDefault(false)),
+        all: Flag.boolean("all").pipe(
+          Flag.withDescription("Show live and historical sessions"),
+          Flag.withDefault(false),
+        ),
+        json: Flag.boolean("json").pipe(
+          Flag.withDescription("Print the catalog as JSON instead of opening the TUI"),
+          Flag.withDefault(false),
+        ),
+        session: Flag.string("session").pipe(
+          Flag.withAlias("s"),
+          Flag.withDescription("Print one session transcript as JSON"),
+          Flag.optional,
+        ),
+        query: Flag.string("query").pipe(
+          Flag.withAlias("q"),
+          Flag.withDescription("Filter sessions by title, path, or id"),
+          Flag.optional,
+        ),
+        home: Flag.string("home").pipe(
+          Flag.withDescription("Override the user home used to discover agent stores"),
+          Flag.optional,
+        ),
+      },
+    }),
     Spec.make("pair", { description: "Show server pairing information" }),
     Spec.make("serve", {
       description: "Start the v2 API and web server",

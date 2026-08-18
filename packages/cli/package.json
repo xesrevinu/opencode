@@ -30,6 +30,7 @@
     "@opencode-ai/pty": "0.1.13",
     "@opencode/schema": "workspace:*",
     "@opencode/server": "workspace:*",
+    "@opencode-ai/session-viewer": "workspace:*",
     "@opencode/tui": "workspace:*",
     "@opencode/util": "workspace:*",
     "@opentui/core": "catalog:",
