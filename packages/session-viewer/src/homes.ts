@@ -5,6 +5,7 @@ import { AGENTS, type AgentHomes, type AgentKind } from "./model"
 export function defaultHomes(root = os.homedir()): Required<AgentHomes> {
   return {
     opencode: path.join(root, ".local", "share", "opencode"),
+    cursor: path.join(root, ".cursor"),
     codex: path.join(root, ".codex"),
     pi: path.join(root, ".pi"),
     grok: path.join(root, ".grok"),
@@ -16,6 +17,7 @@ export function resolveHomes(homes?: AgentHomes, root?: string): Required<AgentH
   const defaults = defaultHomes(root)
   return {
     opencode: homes?.opencode ?? defaults.opencode,
+    cursor: homes?.cursor ?? defaults.cursor,
     codex: homes?.codex ?? defaults.codex,
     pi: homes?.pi ?? defaults.pi,
     grok: homes?.grok ?? defaults.grok,

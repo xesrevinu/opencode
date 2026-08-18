@@ -1,7 +1,8 @@
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { useKeyboard } from "@opentui/solid"
-import type { SessionTranscript, TranscriptPart } from "../model"
+import type { SessionTranscript } from "../model"
 import { AGENT_LABEL } from "../model"
+import { flattenOpenCodeContent, toOpenCodeMessages, type OpenCodeViewRow } from "../opencode-view"
 import { collapseToolOutput } from "../text"
 import { formatWhen, shortPath } from "../format"
 import { theme } from "./theme"
@@ -9,7 +10,8 @@ import { theme } from "./theme"
 export function SessionView(props: { transcript?: SessionTranscript; now: number }) {
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set())
   const [cursor, setCursor] = createSignal(0)
-  const tools = createMemo(() => (props.transcript?.parts ?? []).filter((part) => part.type === "tool"))
+  const rows = createMemo(() => (props.transcript ? flattenOpenCodeContent(toOpenCodeMessages(props.transcript)) : []))
+  const tools = createMemo(() => rows().filter((row) => row.kind === "tool"))
 
   useKeyboard((event) => {
     if (event.name === "down" || event.name === "j") {
@@ -59,12 +61,12 @@ export function SessionView(props: { transcript?: SessionTranscript; now: number
             </box>
             <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
               <box flexDirection="column" paddingLeft={1} paddingRight={1} paddingTop={1}>
-                <For each={transcript().parts}>
-                  {(part) => (
+                <For each={rows()}>
+                  {(row) => (
                     <PartView
-                      part={part}
-                      expanded={part.type === "tool" && expanded().has(part.id)}
-                      focused={part.type === "tool" && tools()[cursor()]?.id === part.id}
+                      row={row}
+                      expanded={row.kind === "tool" && expanded().has(row.id)}
+                      focused={row.kind === "tool" && tools()[cursor()]?.id === row.id}
                     />
                   )}
                 </For>
@@ -80,52 +82,49 @@ export function SessionView(props: { transcript?: SessionTranscript; now: number
   )
 }
 
-function PartView(props: { part: TranscriptPart; expanded: boolean; focused: boolean }) {
-  const part = props.part
-  if (part.type === "user") {
+function PartView(props: {
+  row: OpenCodeViewRow
+  expanded: boolean
+  focused: boolean
+}) {
+  const row = props.row
+  if (row.kind === "user") {
     return (
       <box flexDirection="column" marginBottom={1}>
         <text fg={theme.user}>user</text>
-        <text fg={theme.text}>{part.text}</text>
+        <text fg={theme.text}>{row.text}</text>
       </box>
     )
   }
-  if (part.type === "assistant") {
+  if (row.kind === "assistant") {
     return (
       <box flexDirection="column" marginBottom={1}>
         <text fg={theme.assistant}>assistant</text>
-        <text fg={theme.text}>{part.text}</text>
+        <text fg={theme.text}>{row.text}</text>
       </box>
     )
   }
-  if (part.type === "reasoning") {
+  if (row.kind === "reasoning") {
     return (
       <box flexDirection="column" marginBottom={1}>
         <text fg={theme.reasoning}>thinking</text>
-        <text fg={theme.muted}>{part.text}</text>
+        <text fg={theme.muted}>{row.text}</text>
       </box>
     )
   }
-  if (part.type === "system") {
-    return (
-      <box marginBottom={1}>
-        <text fg={theme.dim}>{part.text}</text>
-      </box>
-    )
-  }
-  const preview = part.output ? collapseToolOutput(part.output) : undefined
+  const preview = row.output ? collapseToolOutput(row.output) : undefined
   return (
     <box flexDirection="column" marginBottom={1} backgroundColor={props.focused ? theme.selected : undefined}>
       <text fg={theme.tool}>
         {props.focused ? "› " : "  "}
-        {part.name}  {part.status}
+        {row.name}  {row.status}
         {props.expanded ? "  ▼" : "  ▶"}
       </text>
-      <Show when={part.input}>
-        <text fg={theme.muted}>{collapseToolOutput(part.input, 4, 200).output}</text>
+      <Show when={row.input}>
+        <text fg={theme.muted}>{collapseToolOutput(row.input, 4, 200).output}</text>
       </Show>
-      <Show when={props.expanded && part.output}>
-        <text fg={theme.text}>{part.output}</text>
+      <Show when={props.expanded && row.output}>
+        <text fg={theme.text}>{row.output}</text>
       </Show>
       <Show when={!props.expanded && preview}>
         <text fg={theme.dim}>{preview!.output}</text>

@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import { listClaude, loadClaude } from "../src/adapters/claude"
 import { listCodex, loadCodex } from "../src/adapters/codex"
+import { listCursor, loadCursor } from "../src/adapters/cursor"
 import { listGrok, loadGrok } from "../src/adapters/grok"
 import { listOpencode, loadOpencode } from "../src/adapters/opencode"
 import { listPi, loadPi } from "../src/adapters/pi"
@@ -206,6 +207,51 @@ describe("adapters", () => {
     expect(transcript.parts[2]).toMatchObject({ name: "read", output: "# docs", status: "completed" })
   })
 
+  test("reads Cursor agent transcripts and skips subagents", async () => {
+    const root = await tempRoot("cursor")
+    const file = path.join(
+      root,
+      "projects",
+      "Users-kee-Workspace-github-com-effect-anything-activitywatch",
+      "agent-transcripts",
+      "cur-1",
+      "cur-1.jsonl",
+    )
+    await writeJsonl(file, [
+      { role: "user", message: { content: [{ type: "text", text: "<user_query>redesign the website</user_query>" }] } },
+      {
+        role: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "looking at pages" },
+            { type: "tool_use", id: "tool-1", name: "Read", input: { path: "index.html" } },
+          ],
+        },
+      },
+      { type: "turn_ended" },
+    ])
+    await writeJsonl(
+      path.join(
+        root,
+        "projects",
+        "Users-kee-Workspace-github-com-effect-anything-activitywatch",
+        "agent-transcripts",
+        "cur-1",
+        "subagents",
+        "child.jsonl",
+      ),
+      [{ role: "user", message: { content: [{ type: "text", text: "subagent only" }] } }],
+    )
+    const listed = await listCursor(root, now)
+    expect(listed).toHaveLength(1)
+    expect(listed[0]?.id).toBe("cur-1")
+    expect(listed[0]?.title).toBe("redesign the website")
+    expect(listed[0]?.cwd).toContain("activitywatch")
+    const transcript = await loadCursor(listed[0]!)
+    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "assistant", "tool"])
+    expect(transcript.parts[2]).toMatchObject({ name: "Read", status: "completed" })
+  })
+
   test("discover lists every agent and can reload a transcript", async () => {
     const root = await tempRoot("all")
     await writeJsonl(path.join(root, ".codex", "sessions", "s.jsonl"), [
@@ -219,6 +265,7 @@ describe("adapters", () => {
     const sessions = await listSessions(
       {
         opencode: path.join(root, "missing-opencode"),
+        cursor: path.join(root, "missing-cursor"),
         codex: path.join(root, ".codex"),
         pi: path.join(root, "missing-pi"),
         grok: path.join(root, "missing-grok"),

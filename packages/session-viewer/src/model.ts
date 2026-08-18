@@ -1,8 +1,9 @@
-export const AGENTS = ["opencode", "codex", "pi", "grok", "claude"] as const
+export const AGENTS = ["opencode", "cursor", "codex", "pi", "grok", "claude"] as const
 export type AgentKind = (typeof AGENTS)[number]
 
 export const AGENT_LABEL: Record<AgentKind, string> = {
   opencode: "OpenCode",
+  cursor: "Cursor",
   codex: "Codex",
   pi: "PI",
   grok: "Grok",

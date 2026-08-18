@@ -14,7 +14,7 @@ Usage:
 Flags:
   --live            Show only live sessions (default for the TUI)
   --all             Show live and historical sessions
-  --agent <name>    Filter: opencode, codex, pi, grok, claude
+  --agent <name>    Filter: opencode, cursor, codex, pi, grok, claude
   --query, -q       Filter by title, path, or id
   --json            Print the catalog as JSON
   --session, -s     Print one transcript as JSON

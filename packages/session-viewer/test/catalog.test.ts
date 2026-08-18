@@ -31,6 +31,7 @@ describe("catalog", () => {
       ["pi", 1, 1],
       ["grok", 0, 1],
     ])
+    expect(catalog.groups.some((group) => group.agent === "cursor")).toBe(false)
     expect(catalog.liveCount).toBe(2)
     expect(catalog.sessions[0]?.id).toBe("pi-1")
   })
