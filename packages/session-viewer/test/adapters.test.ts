@@ -9,7 +9,7 @@ import { listOpencode, loadOpencode } from "../src/adapters/opencode"
 import { listPi, loadPi } from "../src/adapters/pi"
 import { listSessions, loadTranscript } from "../src/discover"
 import { LIVE_WINDOW_MS } from "../src/live"
-import { tempRoot, writeJson, writeJsonl } from "./helpers"
+import { tempRoot, writeCursorStore, writeJson, writeJsonl } from "./helpers"
 
 const now = Date.parse("2026-08-19T00:00:00.000Z")
 
@@ -250,6 +250,73 @@ describe("adapters", () => {
     const transcript = await loadCursor(listed[0]!)
     expect(transcript.parts.map((part) => part.type)).toEqual(["user", "assistant", "tool"])
     expect(transcript.parts[2]).toMatchObject({ name: "Read", status: "completed" })
+  })
+
+  test("reads Cursor composer sqlite as the original store and keeps jsonl as fallback", async () => {
+    const root = await tempRoot("cursor-store")
+    await writeCursorStore(path.join(root, "state.vscdb"), [
+      {
+        key: "composerData:empty-state-draft",
+        value: { name: "Draft", fullConversationHeadersOnly: [] },
+      },
+      {
+        key: "composerData:comp-1",
+        value: {
+          name: "Fix atoms",
+          createdAt: now,
+          lastUpdatedAt: now,
+          modelConfig: { modelName: "claude-sonnet" },
+          workspaceIdentifier: { uri: { fsPath: "/repo" } },
+          fullConversationHeadersOnly: [
+            { bubbleId: "b1", type: 1, createdAt: "2026-08-19T00:00:00.000Z" },
+            { bubbleId: "b2", type: 2, createdAt: "2026-08-19T00:00:01.000Z" },
+            { bubbleId: "b3", type: 2, createdAt: "2026-08-19T00:00:02.000Z" },
+          ],
+        },
+      },
+      { key: "bubbleId:comp-1:b1", value: { type: 1, text: "fix the atoms" } },
+      { key: "bubbleId:comp-1:b2", value: { type: 2, text: "running", thinking: "plan first" } },
+      {
+        key: "bubbleId:comp-1:b3",
+        value: {
+          type: 2,
+          text: "",
+          toolFormerData: {
+            name: "run_terminal_command_v2",
+            status: "completed",
+            toolCallId: "call-1",
+            params: { command: "pwd" },
+            result: { output: "/repo" },
+          },
+        },
+      },
+    ])
+    await writeJsonl(
+      path.join(root, "projects", "Users-kee-repo", "agent-transcripts", "comp-1", "comp-1.jsonl"),
+      [{ role: "user", message: { content: [{ type: "text", text: "lossy jsonl should lose" }] } }],
+    )
+    await writeJsonl(
+      path.join(root, "projects", "Users-kee-repo", "agent-transcripts", "jsonl-only", "jsonl-only.jsonl"),
+      [{ role: "user", message: { content: [{ type: "text", text: "only in jsonl" }] } }],
+    )
+    const listed = await listCursor(root, now)
+    expect(listed.map((session) => session.id).sort()).toEqual(["comp-1", "jsonl-only"])
+    expect(listed.find((session) => session.id === "comp-1")).toMatchObject({
+      title: "Fix atoms",
+      cwd: "/repo",
+      model: "claude-sonnet",
+      sourcePath: path.join(root, "state.vscdb"),
+    })
+    const transcript = await loadCursor(listed.find((session) => session.id === "comp-1")!)
+    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "reasoning", "assistant", "tool"])
+    expect(transcript.parts[0]).toMatchObject({ text: "fix the atoms" })
+    expect(transcript.parts[1]).toMatchObject({ text: "plan first" })
+    expect(transcript.parts[3]).toMatchObject({
+      id: "call-1",
+      name: "run_terminal_command_v2",
+      output: "/repo",
+      status: "completed",
+    })
   })
 
   test("discover lists every agent and can reload a transcript", async () => {

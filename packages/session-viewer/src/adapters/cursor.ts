@@ -4,8 +4,21 @@ import { readJsonl, readJsonlHead, walkFiles } from "../jsonl"
 import { markLive } from "../live"
 import type { SessionSummary, SessionTranscript, TranscriptPart } from "../model"
 import { asRecord, asString, cwdFromEncodedName, formatJson, nextId, textFromContent, timestampMs, titleFromText } from "../text"
+import { listCursorStore, loadCursorStore } from "./cursor-store"
 
 export async function listCursor(home: string, now: number): Promise<SessionSummary[]> {
+  const store = listCursorStore(home, now)
+  const jsonl = await listCursorJsonl(home, now)
+  const seen = new Set(store.map((session) => session.id))
+  return [...store, ...jsonl.filter((session) => !seen.has(session.id))]
+}
+
+export async function loadCursor(summary: SessionSummary): Promise<SessionTranscript> {
+  if (summary.sourcePath.endsWith(".vscdb")) return loadCursorStore(summary)
+  return loadCursorJsonl(summary)
+}
+
+async function listCursorJsonl(home: string, now: number): Promise<SessionSummary[]> {
   const files = await walkFiles(path.join(home, "projects"), (name, full) => {
     if (!name.endsWith(".jsonl")) return false
     return full.includes(`${path.sep}agent-transcripts${path.sep}`) && !full.includes(`${path.sep}subagents${path.sep}`)
@@ -14,7 +27,7 @@ export async function listCursor(home: string, now: number): Promise<SessionSumm
   return summaries.flat()
 }
 
-export async function loadCursor(summary: SessionSummary): Promise<SessionTranscript> {
+async function loadCursorJsonl(summary: SessionSummary): Promise<SessionTranscript> {
   const events = await readJsonl(summary.sourcePath)
   const parts: TranscriptPart[] = []
   let index = 0

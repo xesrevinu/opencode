@@ -92,7 +92,15 @@ function asJsonRecord(value: unknown): { [x: string]: JsonValue } {
 
 function normalizeToolName(name: string) {
   const normalized = name.trim().toLowerCase()
-  if (normalized === "bash") return "shell"
+  if (normalized === "bash" || normalized === "shell" || normalized === "run_terminal_command_v2") return "shell"
+  if (normalized === "read" || normalized === "readfile" || normalized === "read_file" || normalized === "read_file_v2") {
+    return "read"
+  }
+  if (normalized === "edit" || normalized === "strreplace" || normalized === "edit_file_v2") return "edit"
+  if (normalized === "glob" || normalized === "glob_file_search") return "glob"
+  if (normalized === "grep" || normalized === "rg" || normalized === "ripgrep_raw_search") return "grep"
+  if (normalized === "websearch" || normalized === "web_search") return "websearch"
+  if (normalized === "webfetch" || normalized === "web_fetch") return "webfetch"
   if (normalized === "task") return "subagent"
   if (normalized === "apply_patch") return "patch"
   return normalized
