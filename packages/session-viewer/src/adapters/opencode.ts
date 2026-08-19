@@ -1,8 +1,8 @@
-import { Database } from "bun:sqlite"
 import { readdir } from "node:fs/promises"
 import path from "node:path"
 import { markLive } from "../live"
 import type { SessionSummary, SessionTranscript, TranscriptPart } from "../model"
+import { openReadonlyDatabase } from "../sqlite"
 import { asRecord, asString, formatJson, nextId, textFromContent, titleFromText } from "../text"
 
 export async function listOpencode(home: string, now: number): Promise<SessionSummary[]> {
@@ -134,11 +134,7 @@ function readSessions(file: string, now: number): SessionSummary[] {
 }
 
 function open(file: string) {
-  try {
-    return new Database(file, { readonly: true, create: false })
-  } catch {
-    return undefined
-  }
+  return openReadonlyDatabase(file)
 }
 
 function parseData(raw: string) {

@@ -1,12 +1,14 @@
 import { Database } from "bun:sqlite"
-import { existsSync, statSync } from "node:fs"
+import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { markLive } from "../live"
-import type { SessionSummary, SessionTranscript, TranscriptPart } from "../model"
+import type { SessionSummary, SessionTranscript, ToolStatus, TranscriptPart } from "../model"
+import { openReadonlyDatabase, storeStamp } from "../sqlite"
 import { asNumber, asRecord, asString, formatJson, titleFromText } from "../text"
 
-const listCache = new Map<string, { mtime: number; sessions: SessionSummary[] }>()
+const listCache = new Map<string, { stamp: string; sessions: SessionSummary[] }>()
+const BUBBLE_BATCH = 400
 
 export function cursorStorePaths(cursorHome: string): string[] {
   const paths: string[] = []
@@ -48,7 +50,11 @@ export function loadCursorStore(summary: SessionSummary): SessionTranscript {
   try {
     const composer = readJson(db, `composerData:${summary.id}`)
     const headers = headerList(composer)
-    const bubbles = loadBubbles(db, summary.id)
+    const bubbleIds = headers.flatMap((header) => {
+      const id = asString(header.bubbleId)
+      return id ? [id] : []
+    })
+    const bubbles = loadBubbles(db, summary.id, bubbleIds)
     const parts: TranscriptPart[] = []
     for (const header of headers) {
       const id = asString(header.bubbleId)
@@ -87,69 +93,81 @@ export function loadCursorStore(summary: SessionSummary): SessionTranscript {
 }
 
 function listOneStore(file: string, now: number): SessionSummary[] {
-  const mtime = statSync(file).mtimeMs
+  const stamp = storeStamp(file)
   const cached = listCache.get(file)
-  if (cached && cached.mtime === mtime) {
+  if (cached && cached.stamp === stamp) {
     return cached.sessions.map((session) => ({ ...session, live: markLive(session.updatedAt, now) }))
   }
   const db = openStore(file)
   if (!db) return []
   try {
-    const rows = db.query("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all() as {
-      key: string
+    const rows = db
+      .query(
+        "SELECT composerId, createdAt, lastUpdatedAt, recency, isSubagent, value FROM composerHeaders WHERE ifnull(isSubagent, 0) = 0",
+      )
+      .all() as {
+      composerId: string
+      createdAt: number | null
+      lastUpdatedAt: number | null
+      recency: number | null
+      isSubagent: number | null
       value: unknown
     }[]
     const sessions = rows.flatMap((row) => {
-      const composer = parseJson(row.value)
-      if (!composer) return []
-      const id = row.key.slice("composerData:".length)
-      const headers = headerList(composer)
-      if (id === "empty-state-draft" || headers.length === 0) return []
-      const createdAt = asNumber(composer.createdAt) ?? headerTime(headers[0]) ?? mtime
-      const updatedAt = asNumber(composer.lastUpdatedAt) ?? headerTime(headers[headers.length - 1]) ?? createdAt
-      const title = asString(composer.name)?.trim() || titleFromText(headerPreview(headers), id)
+      if (row.composerId === "empty-state-draft") return []
+      const header = parseJson(row.value) ?? {}
+      if (truthy(header.isDraft) || truthy(header.isEphemeral) || truthy(row.isSubagent)) return []
+      const createdAt = asNumber(row.createdAt) ?? asNumber(header.createdAt) ?? 0
+      const updatedAt = asNumber(row.recency) ?? asNumber(row.lastUpdatedAt) ?? asNumber(header.lastUpdatedAt) ?? createdAt
+      const title = asString(header.name)?.trim() || asString(header.subtitle)?.trim() || titleFromText(row.composerId, row.composerId)
       return [
         {
-          id,
+          id: row.composerId,
           agent: "cursor" as const,
           title,
-          cwd: composerCwd(composer),
-          model: asString(asRecord(composer.modelConfig)?.modelName),
+          cwd: composerCwd(header),
+          model: asString(asRecord(header.modelConfig)?.modelName),
           createdAt,
           updatedAt,
           live: markLive(updatedAt, now),
-          messageCount: headers.length,
           sourcePath: file,
         },
       ]
     })
-    listCache.set(file, { mtime, sessions })
+    listCache.set(file, { stamp, sessions })
     return sessions
+  } catch {
+    return []
   } finally {
     db.close()
   }
 }
 
-function loadBubbles(db: Database, composerId: string) {
-  const rows = db.query("SELECT key, value FROM cursorDiskKV WHERE key LIKE ?").all(`bubbleId:${composerId}:%`) as {
-    key: string
-    value: unknown
-  }[]
+function loadBubbles(db: Database, composerId: string, bubbleIds: string[]) {
   const bubbles = new Map<string, Record<string, unknown>>()
-  for (const row of rows) {
-    const record = parseJson(row.value)
-    if (!record) continue
-    bubbles.set(row.key.slice(row.key.lastIndexOf(":") + 1), record)
+  for (let index = 0; index < bubbleIds.length; index += BUBBLE_BATCH) {
+    const chunk = bubbleIds.slice(index, index + BUBBLE_BATCH)
+    const keys = chunk.map((id) => `bubbleId:${composerId}:${id}`)
+    const placeholders = keys.map(() => "?").join(", ")
+    const rows = db.query(`SELECT key, value FROM cursorDiskKV WHERE key IN (${placeholders})`).all(...keys) as {
+      key: string
+      value: unknown
+    }[]
+    for (const row of rows) {
+      const record = parseJson(row.value)
+      if (!record) continue
+      bubbles.set(row.key.slice(row.key.lastIndexOf(":") + 1), record)
+    }
   }
   return bubbles
 }
 
 function openStore(file: string) {
-  try {
-    return new Database(file, { readonly: true, create: false })
-  } catch {
-    return undefined
-  }
+  return openReadonlyDatabase(file)
+}
+
+function truthy(value: unknown) {
+  return value === true || value === 1 || value === "1"
 }
 
 function readJson(db: Database, key: string) {
@@ -190,16 +208,6 @@ function headerTime(header?: Record<string, unknown>) {
   }
 }
 
-function headerPreview(headers: Record<string, unknown>[]) {
-  for (const header of headers) {
-    if (header.type !== 1) continue
-    const grouping = asRecord(header.grouping)
-    const preview = asString(grouping?.textPreview)
-    if (preview) return preview
-  }
-  return ""
-}
-
 function toolCallId(header: Record<string, unknown>) {
   return asString(asRecord(header.grouping)?.toolCallId)
 }
@@ -229,11 +237,14 @@ function thinkingText(bubble: Record<string, unknown>) {
   return asString(asRecord(bubble.thinking)?.text)?.trim()
 }
 
-function toolStatus(status?: string) {
+function toolStatus(status?: string): ToolStatus {
   const normalized = status?.toLowerCase()
-  if (normalized === "error" || normalized === "failed") return "error" as const
-  if (normalized === "pending" || normalized === "running" || normalized === "loading") return "running" as const
-  return "completed" as const
+  if (normalized === "error" || normalized === "failed") return "error"
+  if (normalized === "cancelled" || normalized === "canceled") return "cancelled"
+  if (normalized === "pending") return "pending"
+  if (normalized === "running" || normalized === "loading") return "running"
+  if (normalized === "completed") return "completed"
+  return "running"
 }
 
 function toolInput(tool: Record<string, unknown>) {

@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
+import { openReadonlyDatabase } from "../src/sqlite"
 import { listClaude, loadClaude } from "../src/adapters/claude"
 import { listCodex, loadCodex } from "../src/adapters/codex"
 import { listCursor, loadCursor } from "../src/adapters/cursor"
@@ -249,48 +250,78 @@ describe("adapters", () => {
     expect(listed[0]?.cwd).toContain("activitywatch")
     const transcript = await loadCursor(listed[0]!)
     expect(transcript.parts.map((part) => part.type)).toEqual(["user", "assistant", "tool"])
-    expect(transcript.parts[2]).toMatchObject({ name: "Read", status: "completed" })
+    expect(transcript.parts[2]).toMatchObject({ name: "Read", status: "running" })
   })
 
-  test("reads Cursor composer sqlite as the original store and keeps jsonl as fallback", async () => {
+  test("lists Cursor sessions from composerHeaders and keeps jsonl as fallback", async () => {
     const root = await tempRoot("cursor-store")
-    await writeCursorStore(path.join(root, "state.vscdb"), [
-      {
-        key: "composerData:empty-state-draft",
-        value: { name: "Draft", fullConversationHeadersOnly: [] },
-      },
-      {
-        key: "composerData:comp-1",
-        value: {
-          name: "Fix atoms",
-          createdAt: now,
-          lastUpdatedAt: now,
-          modelConfig: { modelName: "claude-sonnet" },
-          workspaceIdentifier: { uri: { fsPath: "/repo" } },
-          fullConversationHeadersOnly: [
-            { bubbleId: "b1", type: 1, createdAt: "2026-08-19T00:00:00.000Z" },
-            { bubbleId: "b2", type: 2, createdAt: "2026-08-19T00:00:01.000Z" },
-            { bubbleId: "b3", type: 2, createdAt: "2026-08-19T00:00:02.000Z" },
-          ],
-        },
-      },
-      { key: "bubbleId:comp-1:b1", value: { type: 1, text: "fix the atoms" } },
-      { key: "bubbleId:comp-1:b2", value: { type: 2, text: "running", thinking: "plan first" } },
-      {
-        key: "bubbleId:comp-1:b3",
-        value: {
-          type: 2,
-          text: "",
-          toolFormerData: {
-            name: "run_terminal_command_v2",
-            status: "completed",
-            toolCallId: "call-1",
-            params: { command: "pwd" },
-            result: { output: "/repo" },
+    await writeCursorStore(path.join(root, "state.vscdb"), {
+      headers: [
+        {
+          composerId: "comp-1",
+          value: {
+            name: "Fix atoms",
+            isDraft: false,
+            workspaceIdentifier: { uri: { fsPath: "/repo" } },
           },
         },
-      },
-    ])
+        { composerId: "sub-1", isSubagent: 1, value: { name: "Subagent work", isDraft: false } },
+        { composerId: "draft-1", value: { name: "Draft chat", isDraft: true } },
+        { composerId: "eph-1", value: { name: "Ephemeral", isEphemeral: true } },
+        { composerId: "empty-state-draft", value: { name: "Empty draft", isDraft: false } },
+      ],
+      kv: [
+        {
+          key: "composerData:hidden-1",
+          value: {
+            name: "Should not list from composerData",
+            fullConversationHeadersOnly: [{ bubbleId: "h1", type: 1 }],
+          },
+        },
+        {
+          key: "composerData:comp-1",
+          value: {
+            name: "Fix atoms",
+            modelConfig: { modelName: "claude-sonnet" },
+            workspaceIdentifier: { uri: { fsPath: "/repo" } },
+            fullConversationHeadersOnly: [
+              { bubbleId: "b1", type: 1, createdAt: "2026-08-19T00:00:00.000Z" },
+              { bubbleId: "b2", type: 2, createdAt: "2026-08-19T00:00:01.000Z" },
+              { bubbleId: "b3", type: 2, createdAt: "2026-08-19T00:00:02.000Z" },
+              { bubbleId: "b4", type: 2, createdAt: "2026-08-19T00:00:03.000Z" },
+            ],
+          },
+        },
+        { key: "bubbleId:comp-1:b1", value: { type: 1, text: "fix the atoms" } },
+        { key: "bubbleId:comp-1:b2", value: { type: 2, text: "running", thinking: { text: "plan first" } } },
+        {
+          key: "bubbleId:comp-1:b3",
+          value: {
+            type: 2,
+            text: "",
+            toolFormerData: {
+              name: "run_terminal_command_v2",
+              status: "completed",
+              toolCallId: "call-1",
+              params: { command: "pwd" },
+              result: { output: "/repo" },
+            },
+          },
+        },
+        {
+          key: "bubbleId:comp-1:b4",
+          value: {
+            type: 2,
+            text: "",
+            toolFormerData: { name: "task_v2", status: "cancelled", toolCallId: "call-2", params: {} },
+          },
+        },
+        {
+          key: "bubbleId:hidden-1:h1",
+          value: { type: 1, text: "hidden composerData only" },
+        },
+      ],
+    })
     await writeJsonl(
       path.join(root, "projects", "Users-kee-repo", "agent-transcripts", "comp-1", "comp-1.jsonl"),
       [{ role: "user", message: { content: [{ type: "text", text: "lossy jsonl should lose" }] } }],
@@ -304,11 +335,10 @@ describe("adapters", () => {
     expect(listed.find((session) => session.id === "comp-1")).toMatchObject({
       title: "Fix atoms",
       cwd: "/repo",
-      model: "claude-sonnet",
       sourcePath: path.join(root, "state.vscdb"),
     })
     const transcript = await loadCursor(listed.find((session) => session.id === "comp-1")!)
-    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "reasoning", "assistant", "tool"])
+    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "reasoning", "assistant", "tool", "tool"])
     expect(transcript.parts[0]).toMatchObject({ text: "fix the atoms" })
     expect(transcript.parts[1]).toMatchObject({ text: "plan first" })
     expect(transcript.parts[3]).toMatchObject({
@@ -317,6 +347,7 @@ describe("adapters", () => {
       output: "/repo",
       status: "completed",
     })
+    expect(transcript.parts[4]).toMatchObject({ id: "call-2", name: "task_v2", status: "cancelled" })
   })
 
   test("discover lists every agent and can reload a transcript", async () => {
@@ -344,5 +375,23 @@ describe("adapters", () => {
     expect(sessions[0]?.agent).toBe("codex")
     const transcript = await loadTranscript(sessions[0]!)
     expect(transcript.parts[0]).toMatchObject({ type: "user", text: "codex hello" })
+  })
+
+  test("readonly sqlite cannot write after query_only", async () => {
+    const root = await tempRoot("ro")
+    const file = path.join(root, "store.db")
+    const writable = new Database(file)
+    writable.run("CREATE TABLE notes (id text PRIMARY KEY)")
+    writable.run("INSERT INTO notes VALUES (?)", ["keep"])
+    writable.close()
+
+    const readonly = openReadonlyDatabase(file)
+    expect(readonly).toBeDefined()
+    expect(() => readonly!.run("INSERT INTO notes VALUES (?)", ["leak"])).toThrow()
+    readonly!.close()
+
+    const check = new Database(file)
+    expect(check.query("SELECT id FROM notes").all()).toEqual([{ id: "keep" }])
+    check.close()
   })
 })

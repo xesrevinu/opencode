@@ -93,4 +93,27 @@ describe("toOpenCodeMessages", () => {
     expect(content.map((part) => (part.type === "tool" ? part.name : part.type))).toEqual(["read", "glob", "shell"])
     expect(reduceSessionRows(messages).map((row) => row.type)).toEqual(["message", "group", "part"])
   })
+
+  test("maps task_v2 to subagent and cancelled tools to error state", () => {
+    const transcript: SessionTranscript = {
+      summary: {
+        id: "comp-2",
+        agent: "cursor",
+        title: "task",
+        createdAt: 1,
+        updatedAt: 2,
+        live: false,
+        sourcePath: "/tmp/state.vscdb",
+      },
+      parts: [{ type: "tool", id: "t1", name: "task_v2", input: "{}", status: "cancelled" }],
+    }
+    const [message] = toOpenCodeMessages(transcript)
+    expect(message?.type).toBe("assistant")
+    if (message?.type !== "assistant") return
+    expect(message.content[0]).toMatchObject({
+      type: "tool",
+      name: "subagent",
+      state: { status: "error", error: { message: "cancelled" } },
+    })
+  })
 })

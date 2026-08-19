@@ -25,7 +25,7 @@ export type SessionSummary = {
   sourcePath: string
 }
 
-export type ToolStatus = "pending" | "running" | "completed" | "error"
+export type ToolStatus = "pending" | "running" | "completed" | "error" | "cancelled"
 
 export type TranscriptPart =
   | { type: "user"; id: string; text: string; timestamp?: number }

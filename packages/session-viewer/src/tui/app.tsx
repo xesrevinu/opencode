@@ -25,9 +25,17 @@ export function ViewerApp(props: ViewerAppProps) {
   const rows = createMemo(() => flattenCatalog(catalog()))
   const sessionRows = createMemo(() => rows().flatMap((row, index) => (row.kind === "session" ? [{ index, session: row.session }] : [])))
 
+  let listing: Promise<SessionSummary[]> | undefined
+  let transcriptKey = ""
+
   const refresh = async () => {
     setNow(Date.now())
-    setSessions(await listSessions(props.homes, Date.now()))
+    if (!listing) {
+      listing = listSessions(props.homes, Date.now()).finally(() => {
+        listing = undefined
+      })
+    }
+    setSessions(await listing)
   }
 
   createEffect(() => {
@@ -44,11 +52,17 @@ export function ViewerApp(props: ViewerAppProps) {
   createEffect(() => {
     const current = opened()
     if (!current) {
+      transcriptKey = ""
       setTranscript(undefined)
       return
     }
     const latest = sessions().find((session) => session.id === current.id && session.agent === current.agent) ?? current
-    void loadTranscript(latest).then(setTranscript)
+    const key = `${latest.agent}:${latest.id}:${latest.updatedAt}:${latest.sourcePath}`
+    if (key === transcriptKey) return
+    transcriptKey = key
+    void loadTranscript(latest).then((next) => {
+      if (transcriptKey === key) setTranscript(next)
+    })
   })
 
   const cycleMode = () => {

@@ -65,8 +65,8 @@ function toContent(part: TranscriptPart): SessionMessageAssistant["content"][num
 function toToolState(part: Extract<TranscriptPart, { type: "tool" }>): SessionMessageAssistantTool["state"] {
   const input = parseInput(part.input)
   const metadata = asJsonRecord(part.metadata)
-  if (part.status === "error") {
-    return { status: "error", input, error: { type: "error", message: part.output ?? "error" }, metadata }
+  if (part.status === "error" || part.status === "cancelled") {
+    return { status: "error", input, error: { type: "error", message: part.output ?? part.status }, metadata }
   }
   if (part.status === "completed") {
     return { status: "completed", input, content: [{ type: "text", text: part.output ?? "" }], metadata }
@@ -101,7 +101,7 @@ function normalizeToolName(name: string) {
   if (normalized === "grep" || normalized === "rg" || normalized === "ripgrep_raw_search") return "grep"
   if (normalized === "websearch" || normalized === "web_search") return "websearch"
   if (normalized === "webfetch" || normalized === "web_fetch") return "webfetch"
-  if (normalized === "task") return "subagent"
+  if (normalized === "task" || normalized === "task_v2") return "subagent"
   if (normalized === "apply_patch") return "patch"
   return normalized
 }
