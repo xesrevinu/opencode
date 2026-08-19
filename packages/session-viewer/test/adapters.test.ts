@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
+import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { openReadonlyDatabase } from "../src/sqlite"
 import { listClaude, loadClaude } from "../src/adapters/claude"
 import { listCodex, loadCodex } from "../src/adapters/codex"
 import { listCursor, loadCursor } from "../src/adapters/cursor"
@@ -9,7 +9,9 @@ import { listGrok, loadGrok } from "../src/adapters/grok"
 import { listOpencode, loadOpencode } from "../src/adapters/opencode"
 import { listPi, loadPi } from "../src/adapters/pi"
 import { listSessions, loadTranscript } from "../src/discover"
+import { resetListCache, withListIO } from "../src/list-cache"
 import { LIVE_WINDOW_MS } from "../src/live"
+import { openReadonlyDatabase, sqliteReadonlyUri } from "../src/sqlite"
 import { tempRoot, writeCursorStore, writeJson, writeJsonl } from "./helpers"
 
 const now = Date.parse("2026-08-19T00:00:00.000Z")
@@ -393,5 +395,102 @@ describe("adapters", () => {
     const check = new Database(file)
     expect(check.query("SELECT id FROM notes").all()).toEqual([{ id: "keep" }])
     check.close()
+  })
+
+  test("encodes ? and # in sqlite readonly URIs", () => {
+    expect(sqliteReadonlyUri("/tmp/a?b#c.db")).toBe("file:/tmp/a%3Fb%23c.db?mode=ro")
+  })
+
+  test("reuses list stamps without walking or reopening sqlite", async () => {
+    resetListCache()
+    const root = await tempRoot("list-cache")
+    const dbFile = path.join(root, "opencode", "opencode-v2.db")
+    await mkdir(path.dirname(dbFile), { recursive: true })
+    const db = new Database(dbFile)
+    db.run(`CREATE TABLE session_v2 (
+      id text PRIMARY KEY, title text, directory text NOT NULL, model text,
+      time_created integer NOT NULL, time_updated integer NOT NULL, time_archived integer
+    )`)
+    db.run("CREATE TABLE session_pending (id text PRIMARY KEY, session_id text NOT NULL)")
+    db.run("INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?)", ["ses_1", "Cached", "/repo", null, now, now, null])
+    db.close()
+    await writeJsonl(path.join(root, "codex", "sessions", "s.jsonl"), [
+      { timestamp: "2026-08-19T00:00:00Z", type: "session_meta", payload: { id: "cx", cwd: "/x" } },
+      {
+        timestamp: "2026-08-19T00:00:01Z",
+        type: "response_item",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] },
+      },
+    ])
+
+    const walks: string[] = []
+    const opens: string[] = []
+    await withListIO(
+      {
+        walk: (dir) => walks.push(dir),
+        openSqlite: (file) => opens.push(file),
+      },
+      async () => {
+        expect(await listOpencode(path.join(root, "opencode"), now)).toHaveLength(1)
+        expect(await listOpencode(path.join(root, "opencode"), now)).toHaveLength(1)
+        expect(opens.filter((file) => file.endsWith("opencode-v2.db"))).toHaveLength(1)
+
+        expect(await listCodex(path.join(root, "codex"), now)).toHaveLength(1)
+        expect(await listCodex(path.join(root, "codex"), now)).toHaveLength(1)
+        expect(walks.filter((dir) => dir.includes(`${path.sep}codex${path.sep}sessions`))).toHaveLength(1)
+      },
+    )
+  })
+
+  test("agent filter skips Cursor and OpenCode stores", async () => {
+    resetListCache()
+    const root = await tempRoot("agent-filter")
+    const dbFile = path.join(root, "opencode", "opencode-v2.db")
+    await mkdir(path.dirname(dbFile), { recursive: true })
+    const db = new Database(dbFile)
+    db.run(`CREATE TABLE session_v2 (
+      id text PRIMARY KEY, title text, directory text NOT NULL, model text,
+      time_created integer NOT NULL, time_updated integer NOT NULL, time_archived integer
+    )`)
+    db.run("CREATE TABLE session_pending (id text PRIMARY KEY, session_id text NOT NULL)")
+    db.run("INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?)", ["ses_1", "Skip me", "/repo", null, now, now, null])
+    db.close()
+    await writeCursorStore(path.join(root, "cursor", "state.vscdb"), {
+      headers: [{ composerId: "comp-1", value: { name: "Skip cursor", isDraft: false } }],
+    })
+    await writeJsonl(path.join(root, "codex", "sessions", "s.jsonl"), [
+      { timestamp: "2026-08-19T00:00:00Z", type: "session_meta", payload: { id: "cx", cwd: "/x" } },
+      {
+        timestamp: "2026-08-19T00:00:01Z",
+        type: "response_item",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "codex only" }] },
+      },
+    ])
+
+    const walks: string[] = []
+    const opens: string[] = []
+    const sessions = await withListIO(
+      {
+        walk: (dir) => walks.push(dir),
+        openSqlite: (file) => opens.push(file),
+      },
+      () =>
+        listSessions(
+          {
+            opencode: path.join(root, "opencode"),
+            cursor: path.join(root, "cursor"),
+            codex: path.join(root, "codex"),
+            pi: path.join(root, "missing-pi"),
+            grok: path.join(root, "missing-grok"),
+            claude: path.join(root, "missing-claude"),
+          },
+          now,
+          "codex",
+        ),
+    )
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]?.agent).toBe("codex")
+    expect(opens).toEqual([])
+    expect(walks.some((dir) => dir.includes("cursor") || dir.includes("opencode"))).toBe(false)
   })
 })

@@ -68,12 +68,12 @@ function requireValue(flag: string, value: string | undefined) {
 
 export async function runViewerCli(options: ViewerOptions) {
   const homes = resolveHomes(options.homes, options.home)
-  const sessions = await listSessions(homes)
   const filter: SessionFilter = {
     mode: options.mode ?? (options.json || options.session ? "all" : "live"),
     agent: parseAgent(options.agent),
     query: options.query,
   }
+  const sessions = await listSessions(homes, Date.now(), options.session ? undefined : filter.agent)
   const catalog = buildCatalog(sessions, filter)
   if (options.session) {
     const summary = sessions.find((session) => session.id === options.session)

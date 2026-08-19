@@ -25,20 +25,25 @@ export function ViewerApp(props: ViewerAppProps) {
   const rows = createMemo(() => flattenCatalog(catalog()))
   const sessionRows = createMemo(() => rows().flatMap((row, index) => (row.kind === "session" ? [{ index, session: row.session }] : [])))
 
-  let listing: Promise<SessionSummary[]> | undefined
+  let listing: { agent?: SessionFilter["agent"]; promise: Promise<SessionSummary[]> } | undefined
   let transcriptKey = ""
 
   const refresh = async () => {
+    const agent = filter().agent
     setNow(Date.now())
-    if (!listing) {
-      listing = listSessions(props.homes, Date.now()).finally(() => {
-        listing = undefined
-      })
+    if (!listing || listing.agent !== agent) {
+      listing = {
+        agent,
+        promise: listSessions(props.homes, Date.now(), agent).finally(() => {
+          if (listing?.agent === agent) listing = undefined
+        }),
+      }
     }
-    setSessions(await listing)
+    setSessions(await listing.promise)
   }
 
   createEffect(() => {
+    filter().agent
     void refresh()
     const timer = setInterval(() => void refresh(), 1500)
     onCleanup(() => clearInterval(timer))

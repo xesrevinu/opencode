@@ -2,12 +2,12 @@ import { Database } from "bun:sqlite"
 import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { cachedSessions, storeStamp } from "../list-cache"
 import { markLive } from "../live"
 import type { SessionSummary, SessionTranscript, ToolStatus, TranscriptPart } from "../model"
-import { openReadonlyDatabase, storeStamp } from "../sqlite"
+import { openReadonlyDatabase } from "../sqlite"
 import { asNumber, asRecord, asString, formatJson, titleFromText } from "../text"
 
-const listCache = new Map<string, { stamp: string; sessions: SessionSummary[] }>()
 const BUBBLE_BATCH = 400
 
 export function cursorStorePaths(cursorHome: string): string[] {
@@ -93,11 +93,10 @@ export function loadCursorStore(summary: SessionSummary): SessionTranscript {
 }
 
 function listOneStore(file: string, now: number): SessionSummary[] {
-  const stamp = storeStamp(file)
-  const cached = listCache.get(file)
-  if (cached && cached.stamp === stamp) {
-    return cached.sessions.map((session) => ({ ...session, live: markLive(session.updatedAt, now) }))
-  }
+  return cachedSessions(`cursor:${file}`, storeStamp(file), now, () => readStoreHeaders(file, now))
+}
+
+function readStoreHeaders(file: string, now: number): SessionSummary[] {
   const db = openStore(file)
   if (!db) return []
   try {
@@ -134,7 +133,6 @@ function listOneStore(file: string, now: number): SessionSummary[] {
         },
       ]
     })
-    listCache.set(file, { stamp, sessions })
     return sessions
   } catch {
     return []

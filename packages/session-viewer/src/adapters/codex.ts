@@ -1,14 +1,15 @@
 import { stat } from "node:fs/promises"
 import path from "node:path"
-import { readJsonl, readJsonlHead, walkFiles } from "../jsonl"
+import { cachedFileSessions, readJsonlCached, walkFilesCached } from "../list-cache"
+import { readJsonl, readJsonlHead } from "../jsonl"
 import { markLive } from "../live"
 import type { SessionSummary, SessionTranscript, TranscriptPart } from "../model"
 import { asRecord, asString, nextId, textFromContent, timestampMs, titleFromText } from "../text"
 
 export async function listCodex(home: string, now: number): Promise<SessionSummary[]> {
   const titles = await loadIndexTitles(path.join(home, "session_index.jsonl"))
-  const files = await walkFiles(path.join(home, "sessions"), (name) => name.endsWith(".jsonl"))
-  const summaries = await Promise.all(files.map((file) => summarize(file, titles, now)))
+  const files = await walkFilesCached(path.join(home, "sessions"), "codex", (name) => name.endsWith(".jsonl"))
+  const summaries = await Promise.all(files.map((file) => cachedFileSessions(file, now, () => summarize(file, titles, now))))
   return summaries.flat()
 }
 
@@ -111,7 +112,7 @@ async function summarize(file: string, titles: Map<string, string>, now: number)
 
 async function loadIndexTitles(file: string) {
   const titles = new Map<string, string>()
-  for (const row of await readJsonl(file)) {
+  for (const row of await readJsonlCached(file)) {
     const record = asRecord(row)
     const id = asString(record?.id)
     const title = asString(record?.thread_name)

@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises"
 import path from "node:path"
+import { cachedSessions, storeStamp } from "../list-cache"
 import { markLive } from "../live"
 import type { SessionSummary, SessionTranscript, TranscriptPart } from "../model"
 import { openReadonlyDatabase } from "../sqlite"
@@ -9,7 +10,7 @@ export async function listOpencode(home: string, now: number): Promise<SessionSu
   const files = await listDatabases(home)
   const byId = new Map<string, SessionSummary>()
   for (const file of files) {
-    for (const session of readSessions(file, now)) {
+    for (const session of cachedSessions(`opencode:${file}`, storeStamp(file), now, () => readSessions(file, now))) {
       const existing = byId.get(session.id)
       if (!existing || session.updatedAt > existing.updatedAt) byId.set(session.id, session)
     }
@@ -124,6 +125,7 @@ function readSessions(file: string, now: number): SessionSummary[] {
       createdAt: row.time_created,
       updatedAt: row.time_updated,
       live: markLive(row.time_updated, now, pending.has(row.id)),
+      active: pending.has(row.id),
       sourcePath: file,
     }))
   } catch {

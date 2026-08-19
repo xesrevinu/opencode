@@ -1,13 +1,14 @@
 import { stat } from "node:fs/promises"
 import path from "node:path"
-import { readJsonl, readJsonlHead, walkFiles } from "../jsonl"
+import { cachedFileSessions, walkFilesCached } from "../list-cache"
+import { readJsonl, readJsonlHead } from "../jsonl"
 import { markLive } from "../live"
 import type { SessionSummary, SessionTranscript, TranscriptPart } from "../model"
 import { asRecord, asString, cwdFromEncodedName, formatJson, nextId, textFromContent, timestampMs, titleFromText } from "../text"
 
 export async function listPi(home: string, now: number): Promise<SessionSummary[]> {
-  const files = await walkFiles(path.join(home, "agent", "sessions"), (name) => name.endsWith(".jsonl"))
-  const summaries = await Promise.all(files.map((file) => summarize(file, now)))
+  const files = await walkFilesCached(path.join(home, "agent", "sessions"), "pi", (name) => name.endsWith(".jsonl"))
+  const summaries = await Promise.all(files.map((file) => cachedFileSessions(file, now, () => summarize(file, now))))
   return summaries.flat()
 }
 

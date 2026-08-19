@@ -16,16 +16,19 @@ const loaders: Record<AgentKind, (summary: SessionSummary) => Promise<SessionTra
   claude: loadClaude,
 }
 
-export async function listSessions(homes?: AgentHomes, now = Date.now()): Promise<SessionSummary[]> {
+const listers: Record<AgentKind, (home: string, now: number) => Promise<SessionSummary[]>> = {
+  opencode: listOpencode,
+  cursor: listCursor,
+  codex: listCodex,
+  pi: listPi,
+  grok: listGrok,
+  claude: listClaude,
+}
+
+export async function listSessions(homes?: AgentHomes, now = Date.now(), agent?: AgentKind): Promise<SessionSummary[]> {
   const resolved = resolveHomes(homes)
-  const groups = await Promise.all([
-    listOpencode(resolved.opencode, now),
-    listCursor(resolved.cursor, now),
-    listCodex(resolved.codex, now),
-    listPi(resolved.pi, now),
-    listGrok(resolved.grok, now),
-    listClaude(resolved.claude, now),
-  ])
+  const kinds = agent ? [agent] : (Object.keys(listers) as AgentKind[])
+  const groups = await Promise.all(kinds.map((kind) => listers[kind](resolved[kind], now)))
   return groups.flat()
 }
 

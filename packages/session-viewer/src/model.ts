@@ -21,6 +21,7 @@ export type SessionSummary = {
   createdAt: number
   updatedAt: number
   live: boolean
+  active?: boolean
   messageCount?: number
   sourcePath: string
 }

@@ -1,12 +1,11 @@
 import { stat } from "node:fs/promises"
 import path from "node:path"
-import { readJsonl, readJsonlHead, walkFiles } from "../jsonl"
+import { cachedFileSessions, walkFilesCached } from "../list-cache"
+import { readJsonl, readJsonlHead } from "../jsonl"
 import { markLive } from "../live"
 import type { SessionSummary, SessionTranscript, ToolStatus, TranscriptPart } from "../model"
 import { asRecord, asString, cwdFromEncodedName, formatJson, nextId, textFromContent, timestampMs, titleFromText } from "../text"
 import { listCursorStore, loadCursorStore } from "./cursor-store"
-
-const jsonlCache = new Map<string, { stamp: string; sessions: SessionSummary[] }>()
 
 export async function listCursor(home: string, now: number): Promise<SessionSummary[]> {
   const store = listCursorStore(home, now)
@@ -21,27 +20,12 @@ export async function loadCursor(summary: SessionSummary): Promise<SessionTransc
 }
 
 async function listCursorJsonl(home: string, now: number): Promise<SessionSummary[]> {
-  const files = await walkFiles(path.join(home, "projects"), (name, full) => {
+  const files = await walkFilesCached(path.join(home, "projects"), "cursor-jsonl", (name, full) => {
     if (!name.endsWith(".jsonl")) return false
     return full.includes(`${path.sep}agent-transcripts${path.sep}`) && !full.includes(`${path.sep}subagents${path.sep}`)
   })
-  const stats = await Promise.all(
-    files.map(async (file) => {
-      const info = await stat(file).catch(() => undefined)
-      return { file, mtime: info?.mtimeMs ?? 0, size: info?.size ?? 0 }
-    }),
-  )
-  const stamp = stats
-    .map((row) => `${row.file}:${row.mtime}:${row.size}`)
-    .sort()
-    .join("\n")
-  const cached = jsonlCache.get(home)
-  if (cached && cached.stamp === stamp) {
-    return cached.sessions.map((session) => ({ ...session, live: markLive(session.updatedAt, now) }))
-  }
-  const sessions = (await Promise.all(stats.map((row) => summarize(row.file, now, row.mtime)))).flat()
-  jsonlCache.set(home, { stamp, sessions })
-  return sessions
+  const sessions = await Promise.all(files.map((file) => cachedFileSessions(file, now, () => summarize(file, now))))
+  return sessions.flat()
 }
 
 async function loadCursorJsonl(summary: SessionSummary): Promise<SessionTranscript> {
@@ -145,8 +129,8 @@ function jsonlToolStatus(row: Record<string, unknown>): ToolStatus {
   return "running"
 }
 
-async function summarize(file: string, now: number, mtime?: number): Promise<SessionSummary[]> {
-  const infoMtime = mtime ?? (await stat(file).catch(() => undefined))?.mtimeMs
+async function summarize(file: string, now: number): Promise<SessionSummary[]> {
+  const infoMtime = (await stat(file).catch(() => undefined))?.mtimeMs
   if (infoMtime === undefined) return []
   const head = await readJsonlHead(file, 12)
   const firstUser = head.map(asRecord).find((row) => row?.role === "user")

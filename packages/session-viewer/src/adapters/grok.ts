@@ -1,14 +1,20 @@
-import { stat } from "node:fs/promises"
 import path from "node:path"
-import { readJsonl, walkFiles } from "../jsonl"
+import { cachedSessionsAsync, fileStamp, readJsonCached, walkFilesCached } from "../list-cache"
+import { readJsonl } from "../jsonl"
 import { markLive } from "../live"
 import type { SessionSummary, SessionTranscript, TranscriptPart } from "../model"
 import { asRecord, asString, cwdFromEncodedName, formatJson, nextId, textFromContent, timestampMs, titleFromText } from "../text"
 
 export async function listGrok(home: string, now: number): Promise<SessionSummary[]> {
-  const active = await loadActive(path.join(home, "active_sessions.json"))
-  const files = await walkFiles(path.join(home, "sessions"), (name) => name === "summary.json")
-  const summaries = await Promise.all(files.map((file) => summarize(file, active, now)))
+  const activeFile = path.join(home, "active_sessions.json")
+  const active = await loadActive(activeFile)
+  const activeStamp = fileStamp(activeFile)
+  const files = await walkFilesCached(path.join(home, "sessions"), "grok", (name) => name === "summary.json")
+  const summaries = await Promise.all(
+    files.map((file) =>
+      cachedSessionsAsync(`grok:${file}`, `${fileStamp(file)}|${activeStamp}`, now, () => summarize(file, active, now)),
+    ),
+  )
   return summaries.flat()
 }
 
@@ -76,16 +82,14 @@ export async function loadGrok(summary: SessionSummary): Promise<SessionTranscri
 }
 
 async function summarize(file: string, active: Set<string>, now: number): Promise<SessionSummary[]> {
-  const raw = await Bun.file(file)
-    .json()
-    .catch(() => undefined)
-  const record = asRecord(raw)
+  const record = asRecord(await readJsonCached(file))
   if (!record) return []
   const info = asRecord(record.info)
   const id = asString(info?.id) ?? asString(record.id) ?? path.basename(path.dirname(file))
   const cwd = asString(info?.cwd) ?? cwdFromEncodedName(path.basename(path.dirname(path.dirname(file))))
   const createdAt = timestampMs(record.created_at) ?? 0
-  const updatedAt = timestampMs(record.last_active_at) ?? timestampMs(record.updated_at) ?? (await mtime(file))
+  const stamp = fileStamp(file)
+  const updatedAt = timestampMs(record.last_active_at) ?? timestampMs(record.updated_at) ?? Number(stamp.split(":")[0])
   return [
     {
       id,
@@ -96,6 +100,7 @@ async function summarize(file: string, active: Set<string>, now: number): Promis
       createdAt,
       updatedAt,
       live: markLive(updatedAt, now, active.has(id)),
+      active: active.has(id),
       messageCount: typeof record.num_messages === "number" ? record.num_messages : undefined,
       sourcePath: file,
     },
@@ -103,9 +108,7 @@ async function summarize(file: string, active: Set<string>, now: number): Promis
 }
 
 async function loadActive(file: string) {
-  const raw = await Bun.file(file)
-    .json()
-    .catch(() => [])
+  const raw = await readJsonCached(file)
   const ids = new Set<string>()
   if (!Array.isArray(raw)) return ids
   for (const item of raw) {
@@ -117,9 +120,4 @@ async function loadActive(file: string) {
     if (id) ids.add(id)
   }
   return ids
-}
-
-async function mtime(file: string) {
-  const info = await stat(file).catch(() => undefined)
-  return info?.mtimeMs ?? 0
 }

@@ -1,7 +1,10 @@
 import { Database } from "bun:sqlite"
-import { existsSync, statSync } from "node:fs"
+import { noteOpenSqlite, storeStamp } from "./list-cache"
+
+export { storeStamp }
 
 export function openReadonlyDatabase(file: string) {
+  noteOpenSqlite(file)
   try {
     const db = new Database(sqliteReadonlyUri(file), { readonly: true, create: false })
     db.run("PRAGMA query_only = ON")
@@ -12,12 +15,6 @@ export function openReadonlyDatabase(file: string) {
 }
 
 export function sqliteReadonlyUri(file: string) {
-  return `file:${encodeURI(file.split("\\").join("/"))}?mode=ro`
-}
-
-export function storeStamp(file: string) {
-  return [file, `${file}-wal`].map((path) => {
-    if (!existsSync(path)) return "0"
-    return String(statSync(path).mtimeMs)
-  }).join(":")
+  const normalized = file.split("\\").join("/")
+  return `file:${encodeURI(normalized).replaceAll("?", "%3F").replaceAll("#", "%23")}?mode=ro`
 }
