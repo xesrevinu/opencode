@@ -19,6 +19,8 @@
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
+    "@opencode-ai/client": "workspace:*",
+    "@opencode-ai/tui": "workspace:*",
     "@opentui/core": "catalog:",
     "@opentui/solid": "catalog:",
     "effect": "catalog:",

@@ -31,7 +31,16 @@ export type TranscriptPart =
   | { type: "user"; id: string; text: string; timestamp?: number }
   | { type: "assistant"; id: string; text: string; timestamp?: number }
   | { type: "reasoning"; id: string; text: string; completed: boolean; timestamp?: number }
-  | { type: "tool"; id: string; name: string; input: string; output?: string; status: ToolStatus; timestamp?: number }
+  | {
+      type: "tool"
+      id: string
+      name: string
+      input: string
+      output?: string
+      status: ToolStatus
+      timestamp?: number
+      metadata?: Record<string, unknown>
+    }
   | { type: "system"; id: string; text: string; timestamp?: number }
 
 export type SessionTranscript = {

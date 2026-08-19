@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { reduceSessionRows } from "../../tui/src/routes/session/rows-reduce"
 import { toOpenCodeMessages } from "../src/opencode-view"
 import type { SessionTranscript } from "../src/model"
 
@@ -33,9 +34,10 @@ describe("toOpenCodeMessages", () => {
     expect(content[1]).toMatchObject({
       type: "tool",
       id: "t1",
-      name: "Read",
+      name: "read",
       state: { status: "completed", input: { path: "index.html" }, content: [{ type: "text", text: "<html>" }] },
     })
+    expect(reduceSessionRows(messages).map((row) => row.type)).toEqual(["message", "part", "group"])
   })
 
   test("maps Cursor-style completed tools without output into OpenCode completed state", () => {
@@ -56,7 +58,7 @@ describe("toOpenCodeMessages", () => {
     if (message?.type !== "assistant") return
     expect(message.content[0]).toMatchObject({
       type: "tool",
-      name: "Read",
+      name: "read",
       state: { status: "completed", content: [{ type: "text", text: "" }] },
     })
   })

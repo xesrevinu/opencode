@@ -76,6 +76,7 @@ export async function loadOpencode(summary: SessionSummary): Promise<SessionTran
           output: contentText || undefined,
           status: toolStatus(asString(state?.status)),
           timestamp,
+          metadata: asRecord(state?.metadata),
         })
       }
     }
