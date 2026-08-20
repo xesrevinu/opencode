@@ -57,4 +57,21 @@ export function flattenCatalog(catalog: Catalog) {
   ])
 }
 
+export function windowCatalogRows(rows: CatalogRow[], selectedId: string | undefined, height: number) {
+  if (rows.length === 0) return rows
+  const size = Math.max(1, height)
+  const selected = Math.max(
+    0,
+    rows.findIndex((row) => row.kind === "session" && row.session.id === selectedId),
+  )
+  if (rows.length <= size) return rows
+  const start = Math.min(rows.length - size, Math.max(0, selected - Math.floor(size / 3)))
+  const slice = rows.slice(start, start + size)
+  if (slice[0]?.kind !== "session") return slice
+  const header = rows.slice(0, start).findLast((row) => row.kind === "header")
+  if (!header) return slice
+  const keep = selected - start >= size - 1 ? slice.slice(1) : slice.slice(0, size - 1)
+  return [header, ...keep]
+}
+
 export type CatalogRow = ReturnType<typeof flattenCatalog>[number]

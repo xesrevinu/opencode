@@ -23,10 +23,22 @@ export function textFromContent(content: unknown): string {
       if (!record) return ""
       if (typeof record.text === "string") return record.text
       if (typeof record.input_text === "string") return record.input_text
+      if (typeof record.output_text === "string") return record.output_text
+      if (typeof record.summary_text === "string") return record.summary_text
+      if (typeof record.thinking === "string") return record.thinking
       return ""
     })
     .filter(Boolean)
     .join("\n")
+}
+
+export function displayUserText(text: string) {
+  const query = text.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/i)
+  if (query?.[1]?.trim()) return query[1].trim()
+  return text
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
+    .replace(/<\/?(?:user_query|user_info|user_instructions|attached_files)[^>]*>/gi, "")
+    .trim()
 }
 
 export function titleFromText(text: string, fallback: string) {

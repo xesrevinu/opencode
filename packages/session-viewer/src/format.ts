@@ -10,8 +10,13 @@ export function formatWhen(ms: number) {
   return new Date(ms).toLocaleString()
 }
 
-export function shortPath(value: string | undefined, home?: string) {
+export function shortPath(value: string | undefined, home = process.env.HOME) {
   if (!value) return ""
   if (home && value.startsWith(home)) return `~${value.slice(home.length)}`
   return value
+}
+
+export function shortSessionId(id: string) {
+  if (id.length <= 18) return id
+  return `${id.slice(0, 8)}…${id.slice(-4)}`
 }

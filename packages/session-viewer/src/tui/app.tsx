@@ -1,5 +1,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
-import { useKeyboard } from "@opentui/solid"
+import { useKeyboard, useRenderer } from "@opentui/solid"
+import { DialogConfig } from "@opencode-ai/tui/component/dialog-config"
+import { useDialog } from "@opencode-ai/tui/ui/dialog"
 import { buildCatalog, flattenCatalog } from "../catalog"
 import { listSessions, loadTranscript } from "../discover"
 import { AGENTS, type AgentHomes, type FilterMode, type SessionFilter, type SessionSummary, type SessionTranscript } from "../model"
@@ -13,6 +15,12 @@ export type ViewerAppProps = {
 }
 
 export function ViewerApp(props: ViewerAppProps) {
+  const dialog = useDialog()
+  const renderer = useRenderer()
+  const quit = () => {
+    renderer.setTerminalTitle("")
+    if (!renderer.isDestroyed) renderer.destroy()
+  }
   const [sessions, setSessions] = createSignal<SessionSummary[]>([])
   const [filter, setFilter] = createSignal<SessionFilter>(props.initialFilter)
   const [selected, setSelected] = createSignal(0)
@@ -99,11 +107,10 @@ export function ViewerApp(props: ViewerAppProps) {
   }
 
   useKeyboard((event) => {
-    if (opened()) {
-      if (event.name === "escape") {
-        setOpened(undefined)
-        event.preventDefault()
-      }
+    if (dialog.stack.length) return
+    if (event.ctrl && event.name === "c") {
+      quit()
+      event.preventDefault()
       return
     }
     if (searching()) {
@@ -129,8 +136,24 @@ export function ViewerApp(props: ViewerAppProps) {
       }
       return
     }
-    if (event.name === "q" || (event.ctrl && event.name === "c")) {
-      process.exit(0)
+    if (event.name === "s") {
+      dialog.replace(() => (
+        <DialogConfig include={["session.thinking", "session.tools", "session.markdown", "session.grouping"]} />
+      ))
+      event.preventDefault()
+      return
+    }
+    if (event.name === "q") {
+      quit()
+      event.preventDefault()
+      return
+    }
+    if (opened()) {
+      if (event.name === "escape") {
+        setOpened(undefined)
+        event.preventDefault()
+      }
+      return
     }
     if (event.name === "/") {
       setSearching(true)
@@ -144,7 +167,9 @@ export function ViewerApp(props: ViewerAppProps) {
         event.preventDefault()
         return
       }
-      process.exit(0)
+      quit()
+      event.preventDefault()
+      return
     }
     if (event.name === "l") {
       cycleMode()
@@ -166,6 +191,16 @@ export function ViewerApp(props: ViewerAppProps) {
       event.preventDefault()
       return
     }
+    if (event.name === "pagedown") {
+      move(20)
+      event.preventDefault()
+      return
+    }
+    if (event.name === "pageup") {
+      move(-20)
+      event.preventDefault()
+      return
+    }
     if (event.name === "return") {
       openSelected()
       event.preventDefault()
@@ -184,6 +219,10 @@ export function ViewerApp(props: ViewerAppProps) {
             filter={filter()}
             searching={searching()}
             now={now()}
+            onSelect={(id) => {
+              const index = sessionRows().findIndex((row) => row.session.id === id)
+              if (index >= 0) setSelected(index)
+            }}
           />
         }
       >

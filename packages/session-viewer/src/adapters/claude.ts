@@ -4,7 +4,7 @@ import { cachedFileSessions, walkFilesCached } from "../list-cache"
 import { readJsonl, readJsonlHead } from "../jsonl"
 import { markLive } from "../live"
 import type { SessionSummary, SessionTranscript, TranscriptPart } from "../model"
-import { asRecord, asString, cwdFromEncodedName, formatJson, nextId, textFromContent, timestampMs, titleFromText } from "../text"
+import { asRecord, asString, cwdFromEncodedName, displayUserText, formatJson, nextId, textFromContent, timestampMs, titleFromText } from "../text"
 
 export async function listClaude(home: string, now: number): Promise<SessionSummary[]> {
   const files = await walkFilesCached(path.join(home, "projects"), "claude", (name) => name.endsWith(".jsonl"))
@@ -17,12 +17,14 @@ export async function loadClaude(summary: SessionSummary): Promise<SessionTransc
   const parts: TranscriptPart[] = []
   const tools = new Map<string, number>()
   let index = 0
+  let model = summary.model
   for (const event of events) {
     const record = asRecord(event)
     if (!record) continue
     const type = asString(record.type)
     const timestamp = timestampMs(record.timestamp)
     const message = asRecord(record.message)
+    if (type === "progress" || type === "file-history-snapshot") continue
     if (type === "user") {
       const toolResults = Array.isArray(message?.content)
         ? message.content.flatMap((item) => {
@@ -44,12 +46,14 @@ export async function loadClaude(summary: SessionSummary): Promise<SessionTransc
         }
         continue
       }
+      if (record.isMeta === true) continue
       const text = textFromContent(message?.content) || asString(asRecord(message)?.content) || ""
       if (!text) continue
       parts.push({ type: "user", id: asString(record.uuid) ?? nextId("claude", index++), text, timestamp })
       continue
     }
     if (type !== "assistant" || !message) continue
+    model = asString(message.model) ?? model
     const content = message.content
     if (!Array.isArray(content)) {
       const text = textFromContent(content)
@@ -65,10 +69,12 @@ export async function loadClaude(summary: SessionSummary): Promise<SessionTransc
         continue
       }
       if (row.type === "thinking" || row.type === "reasoning") {
+        const text = asString(row.thinking) ?? asString(row.text) ?? ""
+        if (!text.trim()) continue
         parts.push({
           type: "reasoning",
           id: nextId("claude-reason", index++),
-          text: asString(row.thinking) ?? asString(row.text) ?? "",
+          text,
           completed: true,
           timestamp,
         })
@@ -87,20 +93,20 @@ export async function loadClaude(summary: SessionSummary): Promise<SessionTransc
       })
     }
   }
-  return { summary, parts }
+  return { summary: { ...summary, model }, parts }
 }
 
 async function summarize(file: string, now: number): Promise<SessionSummary[]> {
   const info = await stat(file).catch(() => undefined)
   if (!info) return []
   const head = await readJsonlHead(file, 16)
-  const first = head.map(asRecord).find((row) => row?.type === "user" && asRecord(row.message))
+  const first = head.map(asRecord).find((row) => claudePromptText(row) !== undefined)
   const id =
     asString(first?.sessionId) ??
     asString(head.map(asRecord).find((row) => asString(row?.sessionId))?.sessionId) ??
     path.basename(file, ".jsonl")
   const cwd = asString(first?.cwd) ?? cwdFromEncodedName(path.basename(path.dirname(file)))
-  const text = textFromContent(asRecord(first?.message)?.content)
+  const text = claudePromptText(first) ?? ""
   const createdAt = timestampMs(first?.timestamp) ?? info.birthtimeMs
   const updatedAt = info.mtimeMs
   return [
@@ -115,4 +121,15 @@ async function summarize(file: string, now: number): Promise<SessionSummary[]> {
       sourcePath: file,
     },
   ]
+}
+
+function claudePromptText(row?: Record<string, unknown>) {
+  if (!row || row.type !== "user" || row.isMeta === true) return
+  const message = asRecord(row.message)
+  if (!message) return
+  const content = message.content
+  if (Array.isArray(content) && content.some((item) => asRecord(item)?.type === "tool_result")) return
+  const text = displayUserText(textFromContent(content) || asString(content) || "")
+  if (!text) return
+  return text
 }

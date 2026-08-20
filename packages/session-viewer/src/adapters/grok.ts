@@ -23,6 +23,7 @@ export async function loadGrok(summary: SessionSummary): Promise<SessionTranscri
   const parts: TranscriptPart[] = []
   const tools = new Map<string, number>()
   let index = 0
+  let model = summary.model
   for (const event of events) {
     const record = asRecord(event)
     if (!record) continue
@@ -36,16 +37,42 @@ export async function loadGrok(summary: SessionSummary): Promise<SessionTranscri
       continue
     }
     if (type === "reasoning") {
+      const text = textFromContent(record.summary) || textFromContent(record.content) || asString(record.text) || ""
+      if (!text.trim()) continue
       parts.push({
         type: "reasoning",
         id: asString(record.id) ?? nextId("grok-reason", index++),
-        text: textFromContent(record.summary) || textFromContent(record.content) || asString(record.text) || "",
+        text,
         completed: true,
         timestamp,
       })
       continue
     }
+    if (type === "backend_tool_call") {
+      const kind = asRecord(record.kind)
+      const action = asRecord(kind?.action)
+      const id = asString(kind?.id) ?? nextId("grok-backend", index++)
+      const query = asString(action?.query)
+      const sources = Array.isArray(action?.sources)
+        ? action.sources.flatMap((item) => {
+            const source = asRecord(item)
+            const url = asString(source?.url)
+            return url ? [url] : []
+          })
+        : []
+      parts.push({
+        type: "tool",
+        id,
+        name: asString(kind?.tool_type) ?? "web_search",
+        input: formatJson({ query, ...(asRecord(action) ?? {}) }),
+        output: sources.join("\n"),
+        status: asString(kind?.status) === "error" ? "error" : "completed",
+        timestamp,
+      })
+      continue
+    }
     if (type === "assistant") {
+      model = asString(record.model_id) ?? model
       const text = typeof record.content === "string" ? record.content : textFromContent(record.content)
       if (text) parts.push({ type: "assistant", id: nextId("grok", index++), text, timestamp })
       const calls = record.tool_calls
@@ -53,13 +80,14 @@ export async function loadGrok(summary: SessionSummary): Promise<SessionTranscri
       for (const call of calls) {
         const item = asRecord(call)
         if (!item) continue
+        const fn = asRecord(item.function)
         const id = asString(item.id) ?? nextId("grok-tool", index++)
         tools.set(id, parts.length)
         parts.push({
           type: "tool",
           id,
-          name: asString(item.name) ?? "tool",
-          input: formatJson(item.arguments ?? item.input),
+          name: asString(item.name) ?? asString(fn?.name) ?? "tool",
+          input: formatJson(item.arguments ?? item.input ?? fn?.arguments),
           status: "running",
           timestamp,
         })
@@ -68,17 +96,28 @@ export async function loadGrok(summary: SessionSummary): Promise<SessionTranscri
     }
     if (type === "tool_result") {
       const id = asString(record.tool_call_id) ?? nextId("grok-tool", index++)
-      const output = typeof record.content === "string" ? record.content : textFromContent(record.content)
+      const raw = typeof record.content === "string" ? record.content : textFromContent(record.content)
       const existing = tools.get(id)
       if (existing === undefined) {
-        parts.push({ type: "tool", id, name: "tool", input: "", output, status: "completed", timestamp })
+        const parsed = grokToolOutput(raw)
+        parts.push({ type: "tool", id, name: "tool", input: "", ...parsed, status: "completed", timestamp })
         continue
       }
       const part = parts[existing]
-      if (part?.type === "tool") parts[existing] = { ...part, output, status: "completed" }
+      if (part?.type !== "tool") continue
+      parts[existing] = { ...part, ...grokToolOutput(raw, part), status: "completed" }
     }
   }
-  return { summary, parts }
+  return { summary: { ...summary, model }, parts }
+}
+
+function grokToolOutput(raw: string, part?: Extract<TranscriptPart, { type: "tool" }>) {
+  const match = raw.match(/^exit:\s*(-?\d+)\n?([\s\S]*)$/)
+  if (!match) return { output: raw, metadata: part?.metadata }
+  return {
+    output: match[2],
+    metadata: { ...part?.metadata, exit: Number(match[1]) },
+  }
 }
 
 async function summarize(file: string, active: Set<string>, now: number): Promise<SessionSummary[]> {

@@ -1,10 +1,13 @@
-import os from "node:os"
 import path from "node:path"
+import { Global } from "@opencode-ai/util/global"
 import { AGENTS, type AgentHomes, type AgentKind } from "./model"
 
-export function defaultHomes(root = os.homedir()): Required<AgentHomes> {
+export function defaultHomes(root = Global.Path.home): Required<AgentHomes> {
   return {
-    opencode: path.join(root, ".local", "share", "opencode"),
+    opencode:
+      path.resolve(root) === path.resolve(Global.Path.home)
+        ? Global.Path.data
+        : path.join(root, ".local", "share", "opencode"),
     cursor: path.join(root, ".cursor"),
     codex: path.join(root, ".codex"),
     pi: path.join(root, ".pi"),

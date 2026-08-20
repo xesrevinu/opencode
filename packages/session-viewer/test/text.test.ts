@@ -1,11 +1,23 @@
 import { describe, expect, test } from "bun:test"
-import { collapseToolOutput, cwdFromEncodedName, textFromContent, titleFromText } from "../src/text"
-import { formatRelative } from "../src/format"
+import { collapseToolOutput, cwdFromEncodedName, displayUserText, textFromContent, titleFromText } from "../src/text"
+import { formatRelative, shortSessionId } from "../src/format"
 import { markLive } from "../src/live"
 
 describe("text helpers", () => {
   test("extracts text from mixed content arrays", () => {
     expect(textFromContent([{ type: "input_text", text: "hello" }, { type: "text", text: "world" }])).toBe("hello\nworld")
+    expect(textFromContent([{ type: "summary_text", text: "plan" }])).toBe("plan")
+  })
+
+  test("keeps the inner user_query for display", () => {
+    expect(displayUserText("<user_query>audit native apis</user_query>")).toBe("audit native apis")
+    expect(displayUserText("<system-reminder>ignore</system-reminder>\nplease fix")).toBe("please fix")
+    expect(displayUserText("<system-reminder>only</system-reminder>")).toBe("")
+  })
+
+  test("shortens long session ids", () => {
+    expect(shortSessionId("ses_abc")).toBe("ses_abc")
+    expect(shortSessionId("01234567-89ab-cdef-0123-456789abcdef")).toBe("01234567…cdef")
   })
 
   test("strips tags when building titles", () => {

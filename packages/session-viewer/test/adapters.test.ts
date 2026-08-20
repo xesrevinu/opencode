@@ -6,7 +6,7 @@ import { listClaude, loadClaude } from "../src/adapters/claude"
 import { listCodex, loadCodex } from "../src/adapters/codex"
 import { listCursor, loadCursor } from "../src/adapters/cursor"
 import { listGrok, loadGrok } from "../src/adapters/grok"
-import { listOpencode, loadOpencode } from "../src/adapters/opencode"
+import { listOpencode, loadOpencode, resolveOpencodeDatabasePath } from "../src/adapters/opencode"
 import { listPi, loadPi } from "../src/adapters/pi"
 import { listSessions, loadTranscript } from "../src/discover"
 import { resetListCache, withListIO } from "../src/list-cache"
@@ -40,6 +40,16 @@ describe("adapters", () => {
         type: "response_item",
         payload: { type: "function_call_output", call_id: "call-1", output: "/repo" },
       },
+      {
+        timestamp: "2026-08-19T00:00:04Z",
+        type: "event_msg",
+        payload: { type: "agent_reasoning", text: "checking cwd" },
+      },
+      {
+        timestamp: "2026-08-19T00:00:05Z",
+        type: "event_msg",
+        payload: { type: "agent_message", message: "done" },
+      },
     ])
     const listed = await listCodex(root, now)
     expect(listed).toHaveLength(1)
@@ -47,35 +57,110 @@ describe("adapters", () => {
     expect(listed[0]?.cwd).toBe("/repo")
     expect(listed[0]?.live).toBe(true)
     const transcript = await loadCodex(listed[0]!)
-    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "tool"])
+    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "tool", "reasoning", "assistant"])
     expect(transcript.parts[1]).toMatchObject({ name: "exec_command", output: "/repo", status: "completed" })
+    expect(transcript.parts[2]).toMatchObject({ type: "reasoning", text: "checking cwd" })
+    expect(transcript.parts[3]).toMatchObject({ type: "assistant", text: "done" })
   })
 
-  test("reads PI sessions including tool results", async () => {
+  test("reads PI sessions including thinking, tool results, and errors", async () => {
     const root = await tempRoot("pi")
     const file = path.join(root, "agent", "sessions", "--Users-kee-repo--", "2026-08-19T00-00-00_pi-1.jsonl")
     await writeJsonl(file, [
       { type: "session", version: 3, id: "pi-1", timestamp: "2026-08-19T00:00:00Z", cwd: "/Users/kee/repo" },
-      { type: "model_change", modelId: "gpt-5.5", timestamp: "2026-08-19T00:00:00Z" },
-      { type: "message", id: "m1", timestamp: "2026-08-19T00:00:01Z", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
+      { type: "model_change", id: "mc1", parentId: null, provider: "openai-local", modelId: "gpt-5.5", timestamp: "2026-08-19T00:00:00Z" },
+      {
+        type: "message",
+        id: "m1",
+        parentId: "mc1",
+        timestamp: "2026-08-19T00:00:01Z",
+        message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      },
       {
         type: "message",
         id: "m2",
+        parentId: "m1",
         timestamp: "2026-08-19T00:00:02Z",
-        message: { role: "assistant", content: [{ type: "text", text: "working" }, { type: "toolCall", id: "t1", name: "read", arguments: { path: "a.ts" } }] },
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "plan the read" },
+            { type: "text", text: "working" },
+            { type: "toolCall", id: "t1", name: "read", arguments: { path: "a.ts" } },
+            { type: "toolCall", id: "t2", name: "bash", arguments: { command: "false" } },
+          ],
+        },
       },
       {
         type: "message",
         id: "m3",
+        parentId: "m2",
         timestamp: "2026-08-19T00:00:03Z",
-        message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "file body" }] },
+        message: { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "file body" }], isError: false },
+      },
+      {
+        type: "message",
+        id: "m4",
+        parentId: "m3",
+        timestamp: "2026-08-19T00:00:04Z",
+        message: { role: "toolResult", toolCallId: "t2", toolName: "bash", content: [{ type: "text", text: "exit 1" }], isError: true },
       },
     ])
     const listed = await listPi(root, now)
-    expect(listed[0]).toMatchObject({ id: "pi-1", title: "hi", cwd: "/Users/kee/repo", model: "gpt-5.5" })
+    expect(listed[0]).toMatchObject({ id: "pi-1", title: "hi", cwd: "/Users/kee/repo", model: "openai-local/gpt-5.5" })
     const transcript = await loadPi(listed[0]!)
-    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "assistant", "tool"])
-    expect(transcript.parts[2]).toMatchObject({ name: "read", output: "file body", status: "completed" })
+    expect(transcript.summary.model).toBe("openai-local/gpt-5.5")
+    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "reasoning", "assistant", "tool", "tool"])
+    expect(transcript.parts[1]).toMatchObject({ type: "reasoning", text: "plan the read", completed: true })
+    expect(transcript.parts[3]).toMatchObject({ name: "read", output: "file body", status: "completed" })
+    expect(transcript.parts[4]).toMatchObject({ name: "bash", output: "exit 1", status: "error" })
+  })
+
+  test("follows the current PI parentId branch and keeps compaction text", async () => {
+    const root = await tempRoot("pi-branch")
+    const file = path.join(root, "agent", "sessions", "--Users-kee-repo--", "2026-08-19T00-00-00_pi-2.jsonl")
+    await writeJsonl(file, [
+      { type: "session", version: 3, id: "pi-2", timestamp: "2026-08-19T00:00:00Z", cwd: "/Users/kee/repo" },
+      { type: "model_change", id: "mc1", parentId: null, provider: "subgrok-local", modelId: "grok-4.6", timestamp: "2026-08-19T00:00:00Z" },
+      {
+        type: "message",
+        id: "u1",
+        parentId: "mc1",
+        timestamp: "2026-08-19T00:00:01Z",
+        message: { role: "user", content: [{ type: "text", text: "do it" }] },
+      },
+      {
+        type: "message",
+        id: "abandoned",
+        parentId: "u1",
+        timestamp: "2026-08-19T00:00:02Z",
+        message: { role: "assistant", content: [{ type: "text", text: "wrong fork" }] },
+      },
+      {
+        type: "message",
+        id: "u2",
+        parentId: "u1",
+        timestamp: "2026-08-19T00:00:03Z",
+        message: { role: "user", content: [{ type: "text", text: "retry" }] },
+      },
+      {
+        type: "message",
+        id: "kept",
+        parentId: "u2",
+        timestamp: "2026-08-19T00:00:04Z",
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "ok" }, { type: "text", text: "kept path" }] },
+      },
+      { type: "compaction", id: "c1", parentId: "kept", timestamp: "2026-08-19T00:00:05Z", summary: "Compacted: retry succeeded" },
+    ])
+    const listed = await listPi(root, now)
+    const transcript = await loadPi(listed[0]!)
+    expect(transcript.parts.map((part) => ({ type: part.type, text: "text" in part ? part.text : undefined }))).toEqual([
+      { type: "user", text: "do it" },
+      { type: "user", text: "retry" },
+      { type: "reasoning", text: "ok" },
+      { type: "assistant", text: "kept path" },
+      { type: "assistant", text: "Compacted: retry succeeded" },
+    ])
   })
 
   test("reads Grok summaries and chat history, honoring active_sessions", async () => {
@@ -95,18 +180,59 @@ describe("adapters", () => {
       { type: "user", content: [{ type: "text", text: "<user_query>audit native apis</user_query>" }] },
       { type: "assistant", content: "looking", tool_calls: [{ id: "c1", name: "read_file", arguments: { path: "a.ts" } }] },
       { type: "tool_result", tool_call_id: "c1", content: "native metal" },
+      {
+        type: "assistant",
+        content: "next",
+        tool_calls: [{ id: "c2", function: { name: "bash", arguments: "{\"command\":\"pwd\"}" } }],
+      },
+      { type: "tool_result", tool_call_id: "c2", content: "/repo" },
+      {
+        type: "assistant",
+        model_id: "grok-4.6",
+        content: "",
+        tool_calls: [{ id: "c3", name: "run_terminal_command", arguments: { command: "pwd" } }],
+      },
+      { type: "tool_result", tool_call_id: "c3", content: "exit: 0\n/tmp" },
+      {
+        type: "backend_tool_call",
+        kind: {
+          tool_type: "web_search",
+          id: "ws-1",
+          status: "completed",
+          action: { type: "search", query: "metal apis", sources: [{ type: "url", url: "https://example.com" }] },
+        },
+      },
     ])
     const listed = await listGrok(root, now)
     expect(listed[0]).toMatchObject({ id: "g-1", title: "Audit Metal APIs", live: true, model: "grok-4.6" })
     const transcript = await loadGrok(listed[0]!)
-    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "assistant", "tool"])
+    expect(transcript.summary.model).toBe("grok-4.6")
+    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "assistant", "tool", "assistant", "tool", "tool", "tool"])
     expect(transcript.parts[2]).toMatchObject({ output: "native metal", status: "completed" })
+    expect(transcript.parts[4]).toMatchObject({ name: "bash", output: "/repo", status: "completed" })
+    expect(transcript.parts[5]).toMatchObject({
+      name: "run_terminal_command",
+      output: "/tmp",
+      status: "completed",
+      metadata: { exit: 0 },
+    })
+    expect(transcript.parts[6]).toMatchObject({
+      name: "web_search",
+      output: "https://example.com",
+      status: "completed",
+    })
   })
 
   test("reads Claude project jsonl and expands tool calls", async () => {
     const root = await tempRoot("claude")
     const file = path.join(root, "projects", "-Users-kee-repo", "cl-1.jsonl")
     await writeJsonl(file, [
+      {
+        type: "user",
+        isMeta: true,
+        timestamp: "2026-08-19T00:00:00Z",
+        message: { role: "user", content: [{ type: "text", text: "<system-reminder>hidden</system-reminder>" }] },
+      },
       {
         type: "user",
         sessionId: "cl-1",
@@ -119,6 +245,7 @@ describe("adapters", () => {
         timestamp: "2026-08-19T00:00:01Z",
         message: {
           role: "assistant",
+          model: "claude-opus-4-6",
           content: [
             { type: "text", text: "checking" },
             { type: "tool_use", id: "tool-1", name: "Read", input: { path: "nginx.conf" } },
@@ -134,7 +261,9 @@ describe("adapters", () => {
     const listed = await listClaude(root, now)
     expect(listed[0]).toMatchObject({ id: "cl-1", title: "fix the certs", cwd: "/Users/kee/repo" })
     const transcript = await loadClaude(listed[0]!)
+    expect(transcript.summary.model).toBe("claude-opus-4-6")
     expect(transcript.parts.map((part) => part.type)).toEqual(["user", "assistant", "tool"])
+    expect(transcript.parts[0]).toMatchObject({ text: "fix the certs" })
     expect(transcript.parts[2]).toMatchObject({ name: "Read", output: "server {}", status: "completed" })
   })
 
@@ -208,6 +337,30 @@ describe("adapters", () => {
     const transcript = await loadOpencode(listed[0]!)
     expect(transcript.parts.map((part) => part.type)).toEqual(["user", "assistant", "tool"])
     expect(transcript.parts[2]).toMatchObject({ name: "read", output: "# docs", status: "completed" })
+  })
+
+  test("OPENCODE_DB selects one sqlite file relative to the OpenCode data directory", async () => {
+    const root = await tempRoot("opencode-db")
+    writeOpencodeSession(path.join(root, "opencode.db"), "ses_old", "Old session")
+    writeOpencodeSession(path.join(root, "opencode-v2.db"), "ses_v2", "V2 session")
+    const previous = process.env.OPENCODE_DB
+    process.env.OPENCODE_DB = "opencode-v2.db"
+    try {
+      const listed = await listOpencode(root, now)
+      expect(listed).toHaveLength(1)
+      expect(listed[0]).toMatchObject({ id: "ses_v2", title: "V2 session", sourcePath: path.join(root, "opencode-v2.db") })
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_DB
+      else process.env.OPENCODE_DB = previous
+    }
+  })
+
+  test("OPENCODE_DB can be an absolute sqlite path", () => {
+    const file = "/tmp/opencode-v2.db"
+    expect(resolveOpencodeDatabasePath("/ignored", file)).toBe(file)
+    expect(resolveOpencodeDatabasePath("/data", "opencode-v2.db")).toBe(path.join("/data", "opencode-v2.db"))
+    expect(resolveOpencodeDatabasePath("/data", undefined)).toBeUndefined()
+    expect(resolveOpencodeDatabasePath("/data", ":memory:")).toBeUndefined()
   })
 
   test("reads Cursor agent transcripts and skips subagents", async () => {
@@ -494,3 +647,19 @@ describe("adapters", () => {
     expect(walks.some((dir) => dir.includes("cursor") || dir.includes("opencode"))).toBe(false)
   })
 })
+
+function writeOpencodeSession(file: string, id: string, title: string) {
+  const db = new Database(file)
+  db.run(`CREATE TABLE session_v2 (
+    id text PRIMARY KEY,
+    title text,
+    directory text NOT NULL,
+    model text,
+    time_created integer NOT NULL,
+    time_updated integer NOT NULL,
+    time_archived integer
+  )`)
+  db.run("CREATE TABLE session_pending (id text PRIMARY KEY, session_id text NOT NULL)")
+  db.run("INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?)", [id, title, "/repo", null, now, now, null])
+  db.close()
+}

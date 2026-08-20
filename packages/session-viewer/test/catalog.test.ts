@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildCatalog, filterSessions, flattenCatalog, matchesQuery } from "../src/catalog"
+import { buildCatalog, filterSessions, flattenCatalog, matchesQuery, windowCatalogRows } from "../src/catalog"
 import type { SessionSummary } from "../src/model"
 
 function session(partial: Partial<SessionSummary> & Pick<SessionSummary, "id" | "agent">): SessionSummary {
@@ -60,5 +60,17 @@ describe("catalog", () => {
       "pi",
       "pi-1",
     ])
+  })
+
+  test("windows flattened rows around the selected session", () => {
+    const many = Array.from({ length: 20 }, (_, index) =>
+      session({ id: `oc-${index}`, agent: "opencode", title: `S${index}`, updatedAt: index }),
+    )
+    const rows = flattenCatalog(buildCatalog(many, { mode: "all" }))
+    const windowed = windowCatalogRows(rows, "oc-10", 6)
+    expect(windowed).toHaveLength(6)
+    expect(windowed[0]).toMatchObject({ kind: "header", agent: "opencode" })
+    expect(windowed.some((row) => row.kind === "session" && row.session.id === "oc-10")).toBe(true)
+    expect(windowCatalogRows(rows, "oc-0", 6).at(-1)).toMatchObject({ kind: "session", session: { id: "oc-0" } })
   })
 })

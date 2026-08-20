@@ -25,12 +25,12 @@ export async function loadCodex(summary: SessionSummary): Promise<SessionTranscr
     const type = asString(payload.type) ?? asString(record.type)
     const timestamp = timestampMs(record.timestamp) ?? timestampMs(payload.timestamp)
     if (type === "session_meta") continue
-    if (type === "message") {
+    if (type === "message" || type === "agent_message") {
       const role = asString(payload.role)
-      const text = textFromContent(payload.content)
+      const text = textFromContent(payload.content) || asString(payload.message) || asString(payload.text) || ""
       if (!text) continue
       parts.push({
-        type: role === "assistant" ? "assistant" : "user",
+        type: role === "assistant" || type === "agent_message" ? "assistant" : "user",
         id: nextId("codex", index++),
         text,
         timestamp,
@@ -64,11 +64,13 @@ export async function loadCodex(summary: SessionSummary): Promise<SessionTranscr
       if (part?.type === "tool") parts[existing] = { ...part, output, status: "completed" }
       continue
     }
-    if (type === "reasoning") {
+    if (type === "reasoning" || type === "agent_reasoning") {
+      const text = textFromContent(payload.summary) || textFromContent(payload.content) || asString(payload.text) || ""
+      if (!text.trim()) continue
       parts.push({
         type: "reasoning",
         id: nextId("codex-reason", index++),
-        text: textFromContent(payload.summary) || textFromContent(payload.content) || asString(payload.text) || "",
+        text,
         completed: true,
         timestamp,
       })
@@ -87,7 +89,7 @@ async function summarize(file: string, titles: Map<string, string>, now: number)
     asString(payload?.id) ??
     path.basename(file).replace(/^rollout-.*?-/, "").replace(/\.jsonl$/, "")
   const cwd = asString(asRecord(payload)?.cwd)
-  const model = asString(asRecord(payload)?.model_provider)
+  const model = formatCodexModel(asRecord(payload))
   const firstUser = firstUserText(head)
   const createdAt = timestampMs(payload?.timestamp) ?? info.birthtimeMs
   const eventTimes = head.flatMap((row) => {
@@ -119,6 +121,13 @@ async function loadIndexTitles(file: string) {
     if (id && title) titles.set(id, title)
   }
   return titles
+}
+
+function formatCodexModel(payload?: Record<string, unknown>) {
+  const provider = asString(payload?.model_provider)
+  const model = asString(payload?.model)
+  if (provider && model) return `${provider}/${model}`
+  return model ?? provider
 }
 
 function firstUserText(rows: unknown[]) {

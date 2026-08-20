@@ -1,4 +1,4 @@
-export { buildCatalog, filterSessions, flattenCatalog, groupSessions, matchesQuery, sortSessions } from "./catalog"
+export { buildCatalog, filterSessions, flattenCatalog, groupSessions, matchesQuery, sortSessions, windowCatalogRows } from "./catalog"
 export { parseViewerArgs, runViewerCli } from "./cli"
 export { listSessions, loadTranscript } from "./discover"
 export { toOpenCodeMessages } from "./opencode-view"

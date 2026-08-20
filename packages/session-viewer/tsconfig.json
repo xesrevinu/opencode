@@ -8,7 +8,14 @@
     "noUncheckedIndexedAccess": false,
     "paths": {
       "@opencode-ai/client": ["../client/src/promise/index.ts"],
-      "@opencode-ai/tui/session-message-list": ["../tui/src/component/session-message-list.tsx"]
+      "@opencode-ai/tui/session-message-list": ["../tui/src/component/session-message-list.tsx"],
+      "@opencode-ai/tui/component/dialog-config": ["../tui/src/component/dialog-config.tsx"],
+      "@opencode-ai/tui/config": ["../tui/src/config/index.tsx"],
+      "@opencode-ai/tui/context/theme": ["../tui/src/context/theme.tsx"],
+      "@opencode-ai/tui/context/keymap": ["../tui/src/context/keymap.tsx"],
+      "@opencode-ai/tui/context/clipboard": ["../tui/src/context/clipboard.tsx"],
+      "@opencode-ai/tui/ui/dialog": ["../tui/src/ui/dialog.tsx"],
+      "@opencode-ai/tui/ui/toast": ["../tui/src/ui/toast.tsx"]
     }
   }
 }

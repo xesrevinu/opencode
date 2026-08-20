@@ -88,8 +88,16 @@ export async function loadOpencode(summary: SessionSummary): Promise<SessionTran
 }
 
 async function listDatabases(home: string) {
+  const configured = resolveOpencodeDatabasePath(home)
+  if (configured) return [configured]
   const names = await readdir(home).catch(() => [])
   return names.filter((name) => /^opencode.*\.db$/.test(name)).map((name) => path.join(home, name))
+}
+
+export function resolveOpencodeDatabasePath(dataDir: string, configured = process.env.OPENCODE_DB) {
+  if (!configured || configured === ":memory:") return
+  if (path.isAbsolute(configured)) return configured
+  return path.join(dataDir, configured)
 }
 
 function readSessions(file: string, now: number): SessionSummary[] {

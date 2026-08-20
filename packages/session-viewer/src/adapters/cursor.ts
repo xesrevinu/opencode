@@ -77,10 +77,12 @@ async function loadCursorJsonl(summary: SessionSummary): Promise<SessionTranscri
         continue
       }
       if (row.type === "thinking" || row.type === "reasoning") {
+        const text = asString(row.thinking) ?? asString(row.text) ?? ""
+        if (!text.trim()) continue
         parts.push({
           type: "reasoning",
           id: nextId("cursor-reason", index++),
-          text: asString(row.thinking) ?? asString(row.text) ?? "",
+          text,
           completed: true,
           timestamp,
         })

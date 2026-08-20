@@ -37,7 +37,7 @@ describe("toOpenCodeMessages", () => {
       name: "read",
       state: { status: "completed", input: { path: "index.html" }, content: [{ type: "text", text: "<html>" }] },
     })
-    expect(reduceSessionRows(messages).map((row) => row.type)).toEqual(["message", "part", "group"])
+    expect(reduceSessionRows(messages).map((row) => row.type)).toEqual(["message", "part", "group", "assistant-footer"])
   })
 
   test("maps Cursor-style completed tools without output into OpenCode completed state", () => {
@@ -91,7 +91,7 @@ describe("toOpenCodeMessages", () => {
     const messages = toOpenCodeMessages(transcript)
     const content = messages[1] && messages[1].type === "assistant" ? messages[1].content : []
     expect(content.map((part) => (part.type === "tool" ? part.name : part.type))).toEqual(["read", "glob", "shell"])
-    expect(reduceSessionRows(messages).map((row) => row.type)).toEqual(["message", "group", "part"])
+    expect(reduceSessionRows(messages).map((row) => row.type)).toEqual(["message", "group", "part", "assistant-footer"])
   })
 
   test("maps task_v2 to subagent and cancelled tools to error state", () => {
@@ -105,9 +105,14 @@ describe("toOpenCodeMessages", () => {
         live: false,
         sourcePath: "/tmp/state.vscdb",
       },
-      parts: [{ type: "tool", id: "t1", name: "task_v2", input: "{}", status: "cancelled" }],
+      parts: [
+        { type: "tool", id: "t1", name: "task_v2", input: "{}", status: "cancelled" },
+        { type: "tool", id: "t2", name: "write", input: '{"path":"a.ts"}', output: "ok", status: "completed" },
+        { type: "system", id: "sys-1", text: "Operation aborted" },
+      ],
     }
-    const [message] = toOpenCodeMessages(transcript)
+    const messages = toOpenCodeMessages(transcript)
+    const [message, system] = messages
     expect(message?.type).toBe("assistant")
     if (message?.type !== "assistant") return
     expect(message.content[0]).toMatchObject({
@@ -115,5 +120,42 @@ describe("toOpenCodeMessages", () => {
       name: "subagent",
       state: { status: "error", error: { message: "cancelled" } },
     })
+    expect(message.content[1]).toMatchObject({ type: "tool", name: "write" })
+    expect(message.finish).toBe("stop")
+    expect(system).toMatchObject({ type: "system", description: "Operation aborted" })
+  })
+
+  test("strips user_query wrappers and remaps Codex/Cursor tool fields", () => {
+    const transcript: SessionTranscript = {
+      summary: {
+        id: "cx-1",
+        agent: "codex",
+        title: "fix",
+        createdAt: 1,
+        updatedAt: 2,
+        live: false,
+        sourcePath: "/tmp/cx-1.jsonl",
+      },
+      parts: [
+        { type: "user", id: "u1", text: "<user_query>fix it</user_query>", timestamp: 1 },
+        { type: "tool", id: "t1", name: "exec_command", input: '{"cmd":"pwd"}', output: "/repo", status: "completed" },
+        { type: "tool", id: "t2", name: "read_file", input: '{"target_file":"a.ts"}', output: "x", status: "completed" },
+        { type: "tool", id: "t3", name: "run_terminal_command", input: '{"command":"ls"}', output: "a.ts", status: "completed" },
+      ],
+    }
+    const messages = toOpenCodeMessages(transcript)
+    expect(messages[0]).toMatchObject({ type: "user", text: "fix it" })
+    const content = messages[1] && messages[1].type === "assistant" ? messages[1].content : []
+    expect(content[0]).toMatchObject({
+      type: "tool",
+      name: "shell",
+      state: { input: { cmd: "pwd", command: "pwd" } },
+    })
+    expect(content[1]).toMatchObject({
+      type: "tool",
+      name: "read",
+      state: { input: { target_file: "a.ts", path: "a.ts" } },
+    })
+    expect(content[2]).toMatchObject({ type: "tool", name: "shell", state: { input: { command: "ls" } } })
   })
 })
