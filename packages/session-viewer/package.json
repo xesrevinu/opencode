@@ -15,6 +15,7 @@
   "scripts": {
     "start": "bun run src/bin.ts",
     "dev": "bun --watch run src/bin.ts",
+    "build": "bun run script/build.ts",
     "test": "bun test --timeout 30000 --only-failures",
     "typecheck": "tsgo --noEmit"
   },
