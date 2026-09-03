@@ -15,11 +15,11 @@
 | 分支 | 基线 | 内容 |
 | --- | --- | --- |
 | `v2` | `upstream/v2` | fork 核心定制（compaction、shell 环境、provider profiles 等），**不含**本地 package |
-| `fork-packages` | `v2` | 本地 package 栈：`packages/session-viewer` 及后续自研 package |
+| `fun-apps` | `v2` | 本地 package 栈：`packages/session-viewer` 及后续自研 package |
 
 `v2` 跟踪 `upstream/v2`。短期功能分支验证后合并/快进到 `v2`；fork 核心改动**始终 rebase 到上游之上**，不做 merge 上游，保持线性历史。
 
-本地 package **永不推上游**，叠在 `v2` 上，不单独长期维护与 upstream 平行的分支。同步上游时先更新 `v2`，再把 `fork-packages` rebase 到新的 `v2`。
+本地 package **永不推上游**，叠在 `v2` 上，不单独长期维护与 upstream 平行的分支。同步上游时先更新 `v2`，再把 `fun-apps` rebase 到新的 `v2`。
 
 查看 fork 核心定制：
 
@@ -30,7 +30,7 @@ git log --oneline upstream/v2..v2
 查看本地 package 栈：
 
 ```sh
-git log --oneline v2..fork-packages
+git log --oneline v2..fun-apps
 ```
 
 commit SHA 每次 rebase 都会变化，所以本文按主题描述，不写死 SHA。
@@ -101,13 +101,13 @@ rebase 到最新 `upstream/v2` 时，Session compaction 取上游实现，不要
 - Session runner `llm.ts` 随上游隔离 admission/controls 重写，本轮取上游 runner；`startupFiles`、`resumeSuspendedSessions` no-op 仍在 fork 侧。
 - `AIError` 构造只剩 `{ reason }`，旧的 `module`/`method` 以及 `*Reason` 命名已全部换成 `*Error`。`HttpContext` 是 `{ url, status, headers }`。
 - 重启 daemon 是 `system/org.nixos.opencode`（不是文档里旧的 `opencode-v2`）。
-- `fork-packages` 在 `v2` 之上维护本地 package（当前含 `session-viewer`）。同步上游时 `rows.ts` / `rows-reduce.ts` / `session-message-list.tsx` 是主要冲突面：保留 `rows-reduce.ts` 抽取，并把上游 row 逻辑（`sessionRowID`、`backgroundToolRowIndex`、`inputIndex` 等）合进 reducer；`rows.ts` 只做 orchestration + re-export。
+- `fun-apps` 在 `v2` 之上维护本地 package（当前含 `session-viewer`）。同步上游时 `rows.ts` / `rows-reduce.ts` / `session-message-list.tsx` 是主要冲突面：保留 `rows-reduce.ts` 抽取，并把上游 row 逻辑（`sessionRowID`、`backgroundToolRowIndex`、`inputIndex` 等）合进 reducer；`rows.ts` 只做 orchestration + re-export。
 
-### 7. 本地 package（`fork-packages` 分支）
+### 7. 本地 package（`fun-apps` 分支）
 
 `packages/session-viewer`：只读多 agent transcript TUI，支持 OpenCode / Cursor / Claude 等 agent 会话浏览。独立 binary（`packages/session-viewer/script/build.ts`），通过 `@opencode-ai/tui/session-message-list` 与 `rows-reduce` 复用 OpenCode 消息渲染。
 
-后续自研 package 一律叠在同一 `fork-packages` 分支，不 merge 进 `v2`。
+后续自研 package 一律叠在同一 `fun-apps` 分支，不 merge 进 `v2`。
 
 ## 跨仓库耦合
 
@@ -148,13 +148,13 @@ git diff $(git merge-base upstream/v2 v2-prerebase-backup) v2-prerebase-backup \
 git commit -m "fork: replay customizations onto upstream v2"
 ```
 
-### 本地 package（`fork-packages`）
+### 本地 package（`fun-apps`）
 
 `v2` 更新完成后：
 
 ```sh
-git checkout fork-packages
-git branch -f fork-packages-backup fork-packages
+git checkout fun-apps
+git branch -f fun-apps-backup fun-apps
 
 # 方式 A：纯 session-viewer commit 可 cherry-pick（跳过旧 fork replay commit）
 git reset --hard v2
@@ -169,7 +169,7 @@ git rebase v2
 确认结果无误后删除回滚点：
 
 ```sh
-git branch -D v2-prerebase-backup   # 或 fork-packages-backup
+git branch -D v2-prerebase-backup   # 或 fun-apps-backup
 ```
 
 ### 最近一次同步（2026-09-03）
@@ -178,7 +178,7 @@ git branch -D v2-prerebase-backup   # 或 fork-packages-backup
 | --- | --- |
 | `upstream/v2` | `59b29de409` |
 | fork replay (`v2`) | `a63c0afd3e` — `fork: replay customizations onto upstream v2` |
-| `fork-packages` | `60631029d6` — 9 commits on top of `v2`（session-viewer 栈） |
+| `fun-apps` | `60631029d6` — 9 commits on top of `v2`（session-viewer 栈） |
 
 ## 每次改动后要做什么
 
