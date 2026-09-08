@@ -48,6 +48,7 @@ it.live("removes a failed plugin's hooks and RPC handlers without affecting heal
       timeout: 1_000,
       shell: "sh",
       env: {},
+      startupFiles: true,
     })
     yield* trigger
     expect(invoked).toEqual(["broken", "healthy"])

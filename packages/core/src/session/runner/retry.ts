@@ -69,7 +69,31 @@ const retryAfter = (input: Input) => {
   return undefined
 }
 
-const schedule = Schedule.max([Schedule.exponential("2 seconds"), Schedule.recurs(4)]).pipe(
+const retryMaxDelay = (millis: number | undefined) => {
+  if (millis === undefined) return Duration.infinity
+  return Duration.millis(Math.max(1000, Math.min(millis, 300_000)))
+}
+
+const retryAttempts = () => {
+  const attempts = process.env.OPENCODE_RETRY_ATTEMPTS
+    ? Math.max(0, Math.min(parseInt(process.env.OPENCODE_RETRY_ATTEMPTS, 10) || 4, 20))
+    : 4
+  return attempts
+}
+
+const retryDelayCap = () => {
+  const maxDelayMs = process.env.OPENCODE_RETRY_MAX_DELAY_MS
+    ? parseInt(process.env.OPENCODE_RETRY_MAX_DELAY_MS, 10)
+    : undefined
+  return retryMaxDelay(Number.isFinite(maxDelayMs) ? maxDelayMs : undefined)
+}
+
+const decisionSchedule = Schedule.max([
+  Schedule.exponential("2 seconds").pipe(
+    Schedule.modifyDelay(({ duration: delay }) => Effect.succeed(Duration.min(delay, retryDelayCap()))),
+  ),
+  Schedule.recurs(retryAttempts()),
+]).pipe(
   Schedule.jittered,
   Schedule.setInputType<Input>(),
   Schedule.modifyDelay(({ input, duration: delay }) => {
@@ -81,7 +105,7 @@ const schedule = Schedule.max([Schedule.exponential("2 seconds"), Schedule.recur
 
 export const policy = (sessionID: SessionSchema.ID) =>
   Effect.gen(function* () {
-    const step = yield* Schedule.toStep(schedule)
+    const step = yield* Schedule.toStep(decisionSchedule)
     let attempt = 1
     return (input: Input) =>
       Effect.gen(function* () {

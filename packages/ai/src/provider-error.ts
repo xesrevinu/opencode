@@ -71,6 +71,8 @@ const SERVER_CODES = new Set([
   "server_is_overloaded",
   "slow_down",
   "serviceunavailableexception",
+  "stream_read_error",
+  "upstream_error",
 ])
 const INVALID_REQUEST_CODES = new Set(["invalid_prompt", "invalid_request_error", "validationexception"])
 const RATE_LIMIT_TEXT = /rate increased too quickly|rate[-_\s]?limit|too[_\s]?many[_\s]?requests/i
@@ -78,6 +80,8 @@ const QUOTA_TEXT = /insufficient[-_\s]?quota|quota[-_\s]?exceeded/i
 const CONTENT_POLICY_TEXT = /content[-_\s]?policy|content_filter|safety/i
 const SERVER_ERROR_TEXT =
   /\b(?:try again|(?:please |you can )?retry (?:the |this |your )?request|try (?:the |this |your )?request again|(?:currently |temporarily )?at capacity|overloaded|temporarily unavailable|service[-_\s]?unavailable|(?:server|internal)[-_\s]?error|server (?:is )?busy|provider returned (?:an )?error|resource[-_\s]?exhausted|upstream (?:connect|connection|request)|request buffer limit while retrying upstream)\b/i
+const UPSTREAM_ACCESS_DENIED_TEXT =
+  /(?:upstream|provider) access (?:forbidden|denied)|permission denied|not authorized/i
 
 export interface ProviderFailure {
   readonly message: string
@@ -108,14 +112,12 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
   // Scan the raw payload too so signals missing from the summary message
   // (e.g. overflow phrases nested in a JSON error body) still classify.
   const text = [input.message, body].filter((value) => value.length > 0).join("\n")
-  const clientScoped = input.status === undefined || (input.status >= 400 && input.status < 500)
 
   if (
-    clientScoped &&
-    (codes.includes("context_length_exceeded") ||
-      codes.includes("model_context_window_exceeded") ||
-      codes.includes("request_too_large") ||
-      isContextOverflow(text))
+    codes.includes("context_length_exceeded") ||
+    codes.includes("model_context_window_exceeded") ||
+    codes.includes("request_too_large") ||
+    isContextOverflow(text)
   )
     return new InvalidRequestError({ ...details, classification: "context-overflow" })
   if (input.status === 413 || isPayloadTooLarge(text))
@@ -137,6 +139,7 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
       retryAfterMs: input.retryAfterMs,
       rateLimit: input.rateLimit,
     })
+  if (UPSTREAM_ACCESS_DENIED_TEXT.test(text)) return new AuthenticationError(details)
   if (
     input.status === 408 ||
     input.status === 409 ||

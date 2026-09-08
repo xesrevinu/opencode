@@ -374,7 +374,6 @@ function TabContextMenu(props: { state: TabContextMenuState; tabs: SessionTabsCo
   }))
   const actions = createMemo(() => {
     const sessionID = props.state.sessionID
-    const title = props.state.title
     return [
       ...(props.tabs.add ? [{ title: "New tab", run: () => props.tabs.add?.() }] : []),
       ...(sessionID
@@ -384,7 +383,7 @@ function TabContextMenu(props: { state: TabContextMenuState; tabs: SessionTabsCo
               : []),
             {
               title: "Rename",
-              run: () => DialogSessionRename.show(dialog, sessionID, title),
+              run: () => DialogSessionRename.show(dialog, sessionID, props.state.title),
             },
             { title: "Close", run: () => props.tabs.close(sessionID) },
           ]
@@ -1363,8 +1362,18 @@ function HorizontalSessionTabs(props: {
           const background = createMemo(() => {
             const lifted = (hovered() === tab.sessionID || dragged()) && !selected()
             const base = lifted ? theme.background.action.primary.hovered : theme.background.default
-            // A dragged tab lifts to full selected elevation while it is held.
-            return tint(base, theme.raise(theme.background.surface.offset), dragged() ? 1 : selection())
+            const overlay = theme.raise(theme.background.surface.offset)
+            const amount = dragged() ? 1 : selection()
+            // Keep the base alpha so inactive tabs stay transparent and selected
+            // tabs keep the theme's translucent background instead of becoming
+            // an opaque RGB through tint().
+            if (amount === 0) return base
+            return RGBA.fromValues(
+              base.r + (overlay.r - base.r) * amount,
+              base.g + (overlay.g - base.g) * amount,
+              base.b + (overlay.b - base.b) * amount,
+              base.a,
+            )
           })
           const pulseColor = () => tint(background(), theme.text.default, 0.45)
           // The edge flash washes toward a brighter stop on the same background-to-text ramp,

@@ -146,6 +146,21 @@ describe("provider error classification", () => {
     ).toEqual(["QuotaExceeded", "ProviderInternal", "InvalidRequest"])
   })
 
+  test("classifies transient upstream failures without retrying access denials", () => {
+    expect(
+      [
+        classifyProviderFailure({
+          message: "upstream_error: Upstream request failed",
+          data: { error: { code: "upstream_error" } },
+        }),
+        classifyProviderFailure({
+          message: "upstream_error: Upstream access forbidden, please contact administrator",
+          data: { error: { code: "upstream_error" } },
+        }),
+      ].map((reason) => reason._tag),
+    ).toEqual(["ProviderInternal", "Authentication"])
+  })
+
   test("leaves unrecognized failures unclassified for the retry default", () => {
     expect(classifyProviderFailure({ message: '{"error":{"message":"no_kv_space"}}' })._tag).toBe("UnknownProvider")
     expect(classifyProviderFailure({ message: '{"type":"error","error":{"code":123}}' })._tag).toBe("UnknownProvider")

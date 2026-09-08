@@ -37,6 +37,7 @@ import { RunFooterView } from "./footer.view"
 import { monoSnapshot } from "./mono"
 import { RunScrollbackStream } from "./scrollback.surface"
 import { resolveRunTheme, type RunTheme } from "./theme"
+import { startMacOSThemeModeWatcher } from "../theme/macos-mode"
 import { modelInfo } from "./variant.shared"
 import { entrySplash } from "./splash"
 import { SEED_LAUNCH } from "../ui/one-cell-motion"
@@ -221,6 +222,7 @@ export class RunFooter implements FooterApi {
   private paletteRefreshQueued = false
   private themeRefreshTimeouts: NodeJS.Timeout[] = []
   private unsubscribeThemeSignal = () => {}
+  private stopMacOSThemeMode: (() => void) | undefined
 
   private createScrollback(wrote: boolean): RunScrollbackStream {
     return new RunScrollbackStream(this.renderer, this.theme(), {
@@ -321,6 +323,15 @@ export class RunFooter implements FooterApi {
     this.renderer.on(CliRenderEvents.THEME_MODE, this.handleThemeRefresh)
     this.renderer.prependInputHandler(this.handleThemeNotification)
     this.unsubscribeThemeSignal = options.subscribeThemeSignal(this.handleThemeSignal)
+    const writeOut = (sequence: string) => {
+      const writer = (this.renderer as unknown as { writeOut?: (sequence: string) => void }).writeOut
+      writer?.call(this.renderer, sequence)
+    }
+    writeOut("\x1b[?2031h\x1b[?996n")
+    this.stopMacOSThemeMode = startMacOSThemeModeWatcher(() => {
+      if (this.options.tuiConfig.theme?.mode === "dark" || this.options.tuiConfig.theme?.mode === "light") return
+      void this.handleThemeRefresh()
+    })
 
     const footer = this
     void render(
@@ -1065,12 +1076,18 @@ export class RunFooter implements FooterApi {
   }
 
   private handleThemeNotification = (sequence: string): boolean => {
-    if (sequence !== "\x1b[?997;1n" && sequence !== "\x1b[?997;2n") {
+    if (
+      sequence !== "\x1b[?996;1n" &&
+      sequence !== "\x1b[?996;2n" &&
+      sequence !== "\x1b[?997;1n" &&
+      sequence !== "\x1b[?997;2n"
+    ) {
       return false
     }
 
     // OpenTUI clears its palette cache only when dark/light mode changes.
-    // Refresh for same-mode terminal theme swaps too.
+    // Refresh for same-mode terminal theme swaps too, including raw 996/997
+    // notifications that some terminals emit without a THEME_MODE event.
     queueMicrotask(this.handleThemeRefresh)
     return false
   }
@@ -1138,6 +1155,8 @@ export class RunFooter implements FooterApi {
     this.renderer.off(CliRenderEvents.THEME_MODE, this.handleThemeRefresh)
     this.renderer.removeInputHandler(this.handleThemeNotification)
     this.unsubscribeThemeSignal()
+    this.stopMacOSThemeMode?.()
+    this.stopMacOSThemeMode = undefined
     for (const timeout of this.themeRefreshTimeouts) clearTimeout(timeout)
     this.themeRefreshTimeouts.length = 0
     this.prompts.clear()

@@ -23,7 +23,9 @@ import {
 } from "../theme"
 import { generateSystem, terminalMode } from "../theme/system"
 import { discoverThemes } from "../theme/discovery"
+import { startMacOSThemeModeWatcher } from "../theme/macos-mode"
 import { createComponentTheme, createComponentThemeView, type ComponentTheme } from "../theme/component"
+import { applyBackgroundTransparency } from "../theme/transparency"
 import { createEffect, createMemo, onCleanup, onMount, type Accessor, type ParentProps } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
@@ -92,12 +94,14 @@ export {
 } from "../theme"
 
 const THEME_REFRESH_DELAYS = [250, 1000] as const
+const THEME_READY_TIMEOUT = 300
 
 type State = {
   themes: Record<string, ThemeDocumentSource>
   mode: "dark" | "light"
   lock: "dark" | "light" | undefined
   active: string
+  transparent: boolean
   ready: boolean
 }
 
@@ -116,6 +120,8 @@ type Themes = {
   unlock(): void
   setMode(mode?: "dark" | "light", persist?: boolean): boolean
   set(theme: string): boolean
+  transparent: Accessor<boolean>
+  setTransparent(transparent: boolean): void
   onError(handler: ThemeErrorHandler): () => void
   readonly ready: boolean
 }
@@ -131,6 +137,7 @@ const [store, setStore] = createStore<State>({
   mode: "dark",
   lock: undefined,
   active: "opencode",
+  transparent: false,
   ready: false,
 })
 
@@ -156,6 +163,7 @@ const themeContext = createSimpleContext({
         draft.lock = lock
         const active = config.theme?.name ?? "opencode"
         draft.active = typeof active === "string" ? active : "opencode"
+        draft.transparent = config.theme?.transparent === true
         draft.ready = false
       }),
     )
@@ -163,6 +171,11 @@ const themeContext = createSimpleContext({
     createEffect(() => {
       const theme = config.theme?.name
       if (theme) setStore("active", theme)
+    })
+
+    createEffect(() => {
+      const transparent = config.theme?.transparent
+      if (transparent !== undefined) setStore("transparent", transparent)
     })
 
     createEffect(() => {
@@ -184,16 +197,23 @@ const themeContext = createSimpleContext({
     }
 
     onMount(() => {
-      void Promise.allSettled([resolveSystemTheme(store.mode), syncCustomThemes()]).finally(() => {
-        valuesV2()
-        setStore("ready", true)
+      const timeout = new Promise<void>((resolve) => {
+        setTimeout(resolve, THEME_READY_TIMEOUT).unref()
       })
+      void Promise.race([Promise.allSettled([resolveSystemTheme(store.mode), syncCustomThemes()]), timeout]).finally(
+        () => {
+          valuesV2()
+          setStore("ready", true)
+        },
+      )
     })
 
     let systemThemeSignature: string | undefined
     let systemThemeMode: "dark" | "light" | undefined
     let hasResolvedSystemTheme = false
     function resolveSystemTheme(mode: "dark" | "light" = store.mode) {
+      const requested = store.lock ?? mode
+      if (store.mode !== requested) setStore("mode", requested)
       return renderer
         .getPalette({ size: 16 })
         .then((colors: TerminalColors) => {
@@ -223,6 +243,8 @@ const themeContext = createSimpleContext({
     let systemRefreshQueued = false
     let systemRefreshMode = store.mode
     function refreshSystemTheme(mode: "dark" | "light" = store.mode) {
+      const next = store.lock ?? mode
+      if (store.mode !== next) setStore("mode", next)
       systemRefreshMode = mode
       if (systemRefreshRunning) {
         systemRefreshQueued = true
@@ -274,12 +296,30 @@ const themeContext = createSimpleContext({
     }
     renderer.on(CliRenderEvents.THEME_MODE, handle)
 
+    const writeOut = (sequence: string) => {
+      const writer = (renderer as unknown as { writeOut?: (sequence: string) => void }).writeOut
+      writer?.call(renderer, sequence)
+    }
+    writeOut("\x1b[?2031h\x1b[?996n")
+
     const handleThemeNotification = (sequence: string) => {
-      if (sequence !== "\x1b[?997;1n" && sequence !== "\x1b[?997;2n") return false
-      queueMicrotask(() => refreshSystemTheme())
+      if (
+        sequence !== "\x1b[?996;1n" &&
+        sequence !== "\x1b[?996;2n" &&
+        sequence !== "\x1b[?997;1n" &&
+        sequence !== "\x1b[?997;2n"
+      )
+        return false
+      const mode = sequence.endsWith(";1n") ? "dark" : "light"
+      queueMicrotask(() => handle(mode))
       return false
     }
     renderer.prependInputHandler(handleThemeNotification)
+
+    const stopMacOSThemeMode = startMacOSThemeModeWatcher((mode) => {
+      if (store.lock) return
+      handle(mode)
+    })
 
     let themeRefreshTimeouts: ReturnType<typeof setTimeout>[] = []
     const refresh = () => {
@@ -295,7 +335,9 @@ const themeContext = createSimpleContext({
 
     onCleanup(() => {
       renderer.off(CliRenderEvents.THEME_MODE, handle)
+      writeOut("\x1b[?2031l")
       renderer.removeInputHandler(handleThemeNotification)
+      stopMacOSThemeMode?.()
       unsubscribeRefresh?.()
       for (const timeout of themeRefreshTimeouts) clearTimeout(timeout)
       themeRefreshTimeouts.length = 0
@@ -305,12 +347,12 @@ const themeContext = createSimpleContext({
     const selected = createMemo(() => {
       const name = store.themes[store.active] ? store.active : "opencode"
       try {
-        return loadTheme(store.themes[name], name, store.mode)
+        return loadTheme(store.themes[name], name, store.mode, store.transparent)
       } catch (error) {
         if (name === "opencode") throw error
         themeErrors.emit(name, error)
         setStore("active", "opencode")
-        return loadTheme(store.themes.opencode, "opencode", store.mode)
+        return loadTheme(store.themes.opencode, "opencode", store.mode, store.transparent)
       }
     })
     const modes = () => selected().modes
@@ -353,6 +395,15 @@ const themeContext = createSimpleContext({
           .catch(() => {})
         return true
       },
+      transparent: () => store.transparent,
+      setTransparent(transparent: boolean) {
+        setStore("transparent", transparent)
+        void configState
+          .update((draft) => {
+            draft.theme = { ...draft.theme, transparent }
+          })
+          .catch(() => {})
+      },
       onError: themeErrors.onError,
       get ready() {
         return store.ready
@@ -393,11 +444,17 @@ export function ThemeContextProvider(props: ParentProps<{ context: ContextName |
   )
 }
 
-function loadTheme(source: ThemeDocumentSource, name: string, requested: "dark" | "light") {
+function loadTheme(
+  source: ThemeDocumentSource,
+  name: string,
+  requested: "dark" | "light",
+  transparent = false,
+) {
   const document = parseTheme(source, name)
   const modes = themeModes(document)
   const mode = modes.includes(requested) ? requested : (modes[0] ?? requested)
-  return { modes, mode, theme: resolveThemeDocument(document, mode) }
+  const theme = resolveThemeDocument(document, mode)
+  return { modes, mode, theme: transparent ? applyBackgroundTransparency(theme) : theme }
 }
 
 export function createSyntaxStyleMemo(factory: () => SyntaxStyle) {

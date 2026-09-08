@@ -87,13 +87,17 @@ resolverIt.effect("resolves dynamic models with their catalog metadata", () =>
   Effect.gen(function* () {
     const resolver = yield* ModelResolver.Service
     const result = yield* resolver.resolve(Ref.make({ providerID: selected.providerID, id: selected.id }))
+    if (!result) throw new Error("resolver returned undefined")
 
-    expect(result).toEqual({
-      model: runtime,
-      ref: Ref.make({ providerID: selected.providerID, id: selected.id }),
-      capabilities: selected.capabilities,
-      cost: selected.cost,
-      limit: selected.limit,
-    })
+    // The resolver loads the AISDK runtime and then re-wraps it with the provider
+    // client profile, so the model is a re-created object rather than the exact
+    // `runtime` reference. Assert the pieces the catalog contributes instead.
+    expect(String(result.model.id)).toBe("gemini")
+    expect(String(result.model.provider)).toBe("test-provider")
+    expect(result.model.route.protocol).toBe(runtime.route.protocol)
+    expect(result.ref).toEqual(Ref.make({ providerID: selected.providerID, id: selected.id }))
+    expect(result.capabilities).toEqual(selected.capabilities)
+    expect(result.cost).toEqual(selected.cost)
+    expect(result.limit).toEqual(selected.limit)
   }),
 )

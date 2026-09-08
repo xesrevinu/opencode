@@ -33,10 +33,8 @@ export interface BootOptions {
  * serves unauthenticated, so an embedder without a password must front the handler with its own
  * access control.
  *
- * Sessions whose execution claim was never released resume once the layer is built, exactly as
- * the Node server process does: a runtime that dies without teardown — an evicted Durable
- * Object leaves the same durable signature as a killed process — replays orphaned turns on the
- * next boot, and the sweep is a no-op when nothing is suspended.
+ * Leftover execution claims are not consumed here. This fork's restart sweep is a no-op so a
+ * service restart never continues model work without an explicit later user action.
  */
 export const make = Effect.fn("ServerFetch.make")(function* (options: ServerOptions = {}, boot: BootOptions = {}) {
   const context = yield* Layer.build(

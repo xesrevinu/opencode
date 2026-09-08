@@ -4,6 +4,7 @@ import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { LanguageModel } from "@opencode/ai"
 import { Auth } from "@opencode/ai/route"
 import { Context, Effect, Layer, Schema, Struct } from "effect"
+import { Headers } from "effect/unstable/http"
 import { AISDK } from "./aisdk.js"
 import { AISDKNative } from "./aisdk-native.js"
 import { Catalog } from "./catalog.js"
@@ -176,7 +177,10 @@ const resolveCatalogModel = Effect.fn("ModelResolver.resolveCatalogModel")(funct
         ...configuration,
       }) ?? {},
     )
-    return yield* loadAISDK({ ...resolved, settings }).pipe(Effect.mapError(() => unsupported(resolved)))
+    return yield* loadAISDK({ ...resolved, settings }).pipe(
+      Effect.map((model) => withProviderClientProfile(resolved, model)),
+      Effect.mapError(() => unsupported(resolved)),
+    )
   }
   if (!native) return yield* unsupported(resolved)
 
@@ -195,12 +199,14 @@ const resolveCatalogModel = Effect.fn("ModelResolver.resolveCatalogModel")(funct
   return yield* Effect.try({
     try: () => {
       const runtime = module.model(resolved.modelID ?? resolved.id, settings)
-      return LanguageModel.update(runtime, {
-        provider: resolved.canonical ?? resolved.providerID,
-        compatibility: resolved.compatibility
-          ? Object.assign({}, runtime.compatibility, resolved.compatibility)
-          : runtime.compatibility,
-      })
+      return withProviderClientProfile(
+        resolved,
+        LanguageModel.update(runtime, {
+          compatibility: resolved.compatibility
+            ? Object.assign({}, runtime.compatibility, resolved.compatibility)
+            : runtime.compatibility,
+        }),
+      )
     },
     catch: () => unsupported(resolved),
   })
@@ -255,6 +261,15 @@ function unresolvedProviderVariables(model: Info, baseURL: string) {
   })
 }
 
+const withProviderClientProfile = (resolved: Info, runtime: LanguageModel) =>
+  LanguageModel.update(runtime, {
+    provider: resolved.providerID,
+    route: runtime.route.with({ auth: providerClientProfile(resolved, runtime.route.auth) }),
+    compatibility: resolved.compatibility
+      ? Object.assign({}, runtime.compatibility, resolved.compatibility)
+      : runtime.compatibility,
+  })
+
 const nativeCredentialSettings = (specifier: string, credential: Credential.Value | undefined) => {
   if (!credential) return {}
   if (credential.type === "key") return { apiKey: credential.key }
@@ -266,6 +281,122 @@ const nativeCredentialSettings = (specifier: string, credential: Credential.Valu
   )
     return { accessToken: credential.access }
   return { apiKey: credential.access }
+}
+
+const openAIClientProfile = (auth: Auth.Definition) =>
+  auth.andThen(
+    Auth.custom((input) => {
+      const sessionID = input.headers["x-session-affinity"]
+      const headers = Headers.setAll(input.headers, {
+        "user-agent": "codex_cli_rs/0.145.0",
+        ...(input.headers.originator === undefined ? { originator: "codex_cli_rs" } : {}),
+        ...(input.headers["openai-beta"] === undefined ? { "openai-beta": "responses=experimental" } : {}),
+        ...(input.headers.accept === undefined ? { accept: "text/event-stream" } : {}),
+        ...(input.headers["content-type"] === undefined ? { "content-type": "application/json" } : {}),
+        ...(sessionID === undefined ? {} : { session_id: sessionID, conversation_id: sessionID }),
+      })
+      return Effect.succeed(
+        ["x-session-affinity", "x-opencode-small", "x-parent-session-id"].reduce(Headers.remove, headers),
+      )
+    }),
+  )
+
+const anthropicClientProfile = (auth: Auth.Definition) =>
+  auth.andThen(
+    Auth.custom((input) => {
+      const body = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(input.body)
+      const value = body._tag === "Some" && isRecord(body.value) ? body.value : {}
+      const sessionID = input.headers["x-session-affinity"]
+      const headers = Headers.setAll(input.headers, {
+        "anthropic-beta": anthropicBetas(value, input.headers["anthropic-beta"]),
+        "user-agent": "claude-cli/2.1.133 (external, sdk-cli)",
+        ...(sessionID === undefined ? {} : { "x-claude-code-session-id": sessionID }),
+        accept: "application/json",
+        "content-type": "application/json",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "anthropic-version": "2023-06-01",
+        "x-app": "cli",
+        "x-client-request-id": crypto.randomUUID(),
+        "x-stainless-arch": process.arch,
+        "x-stainless-lang": "js",
+        "x-stainless-os": stainlessOS(),
+        "x-stainless-package-version": "0.81.0",
+        "x-stainless-retry-count": "0",
+        "x-stainless-runtime": "node",
+        "x-stainless-runtime-version": `v${process.versions.node}`,
+        "x-stainless-timeout": "600",
+      })
+      return Effect.succeed(["x-session-affinity", "x-opencode-small"].reduce(Headers.remove, headers))
+    }),
+  )
+
+const providerClientProfile = (model: Info, auth: Auth.Definition) => {
+  const providerID = model.providerID.toLowerCase()
+  if (providerID === Provider.ID.openai) return openAIClientProfile(auth)
+  if (providerID === Provider.ID.anthropic) return anthropicClientProfile(auth)
+  return auth
+}
+
+const anthropicBetas = (body: Record<string, unknown>, incoming: string | undefined) => {
+  const base = [
+    "claude-code-20250219",
+    "interleaved-thinking-2025-05-14",
+    "context-management-2025-06-27",
+    "prompt-caching-scope-2026-01-05",
+    "advisor-tool-2026-03-01",
+    "advanced-tool-use-2025-11-20",
+    "effort-2025-11-24",
+  ]
+  const full =
+    Array.isArray(body.tools) &&
+    body.tools.length > 0 &&
+    Array.isArray(body.system) &&
+    isRecord(body.thinking) &&
+    isRecord(body.context_management) &&
+    isRecord(body.output_config) &&
+    isRecord(body.diagnostics)
+  const structured =
+    isRecord(body.output_config) &&
+    isRecord(body.output_config.format) &&
+    body.output_config.format.type === "json_schema"
+  const selected = full
+    ? [
+        "claude-code-20250219",
+        "oauth-2025-04-20",
+        "interleaved-thinking-2025-05-14",
+        "context-management-2025-06-27",
+        "prompt-caching-scope-2026-01-05",
+        "advisor-tool-2026-03-01",
+        "advanced-tool-use-2025-11-20",
+        "context-1m-2025-08-07",
+        "effort-2025-11-24",
+        "extended-cache-ttl-2025-04-11",
+        "cache-diagnosis-2026-04-07",
+      ]
+    : structured
+      ? [...base, "structured-outputs-2025-12-15"]
+      : base
+  return [
+    ...new Set([
+      ...selected,
+      ...(body.speed === "fast" ? ["fast-mode-2026-02-01"] : []),
+      ...(incoming ?? "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ]),
+  ].join(",")
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const stainlessOS = () => {
+  if (process.platform === "darwin") return "MacOS"
+  if (process.platform === "win32") return "Windows"
+  if (process.platform === "linux") return "Linux"
+  if (process.platform === "freebsd") return "FreeBSD"
+  return "Unknown"
 }
 
 const unsupported = (model: Info) =>

@@ -15,6 +15,7 @@ import { PluginHooks } from "../plugin/hooks.js"
 import { QuestionTool } from "../tool/plugin/question.js"
 import { Tool } from "../tool.js"
 import { SessionModelTransport } from "./model-transport.js"
+import { SessionModelHeaders } from "./model-headers.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerModel } from "./runner/model.js"
 import { SessionSchema } from "./schema.js"
@@ -204,16 +205,6 @@ interface HookScope {
   readonly kind: SessionRequestKind
 }
 
-const sessionHeaders = (session: Pick<SessionSchema.Info, "id" | "parentID" | "projectID">, app: App.Info) => ({
-  "x-session-affinity": session.id,
-  "X-Session-Id": session.id,
-  ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
-  "User-Agent": App.useragent(app),
-  "x-opencode-project": session.projectID,
-  "x-opencode-session": session.id,
-  "x-opencode-client": app.name,
-})
-
 const promptCacheKey = (sessionID: SessionSchema.ID) =>
   /^ses_[0-9a-f]{64}$/.test(sessionID) ? sessionID.slice(4) : sessionID
 
@@ -334,7 +325,7 @@ export const layer = Layer.effect(
         LLM.request({
           model,
           http: {
-            headers: sessionHeaders(session, app),
+            headers: SessionModelHeaders.make(session, app, model),
           },
           // TODO: Persist cache lineage so nested forks reuse the root session's cache key.
           promptCacheKey: promptCacheKey(session.fork?.sessionID ?? session.id),

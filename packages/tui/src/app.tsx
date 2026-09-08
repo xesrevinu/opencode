@@ -485,7 +485,7 @@ function App(props: { pair?: DialogPairCredentials }) {
   const toast = useToast()
   const updater = useUpdateNotification()
   const theme = useTheme()
-  const { mode, supports, setMode, locked, lock, unlock } = useThemes()
+  const { mode, supports, setMode, locked, lock, unlock, transparent, setTransparent } = useThemes()
   const data = useData()
   const location = useLocation()
   const exit = useExit()
@@ -1034,6 +1034,16 @@ function App(props: { pair?: DialogPairCredentials }) {
         run: () => {
           if (locked()) unlock()
           else lock()
+          dialog.clear()
+        },
+        category: "System",
+      },
+      {
+        name: "theme.transparency",
+        title: transparent() ? "Disable transparency" : "Enable transparency",
+        palette: undefined,
+        run: () => {
+          setTransparent(!transparent())
           dialog.clear()
         },
         category: "System",

@@ -160,8 +160,11 @@ function info(file: string, options?: Options, bin?: string): Item {
   }
 }
 
-export function args(file: string, command: string) {
+export function args(file: string, command: string, options?: { readonly startupFiles?: boolean }) {
   const n = name(file)
+  if (n === "zsh") return options?.startupFiles === false ? ["-f", "-c", command] : ["-c", command]
+  if (n === "bash")
+    return options?.startupFiles === false ? ["--noprofile", "--norc", "-c", command] : ["-c", command]
   if (n === "cmd") return ["/c", command]
   if (ps(file)) return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
   return ["-c", command]

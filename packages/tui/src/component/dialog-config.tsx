@@ -35,6 +35,15 @@ export const settings: Setting[] = [
     keywords: ["dark mode", "light mode", "system theme"],
   },
   {
+    title: "Transparency",
+    category: "Appearance",
+    path: ["theme", "transparent"],
+    default: false,
+    values: [false, true],
+    labels: ["off", "on"],
+    keywords: ["translucent", "see-through", "background"],
+  },
+  {
     title: "Animations",
     category: "Appearance",
     path: ["animations"],

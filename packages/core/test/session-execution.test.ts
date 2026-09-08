@@ -211,41 +211,37 @@ describe("SessionExecution lifecycle", () => {
         restartedJobs,
       )
       yield* Context.get(restarted, SessionRestart.Service).resumeSuspendedSessions
-      yield* Context.get(restarted, SessionExecution.Service).awaitIdle(parent)
-      expect(drained).toEqual([parent])
-      expect(yield* SessionInbox.list(database.db, parent)).toMatchObject([
-        { payload: { text: expect.stringContaining("Subagent cancelled"), metadata: { state: "cancelled" } } },
-      ])
-      expect(yield* restartedJobs.pendingBackground).toEqual([])
+      expect(drained).toEqual([])
+      expect([...(yield* Context.get(restarted, SessionExecution.Service).active)]).toEqual([])
+      expect(yield* SessionInbox.list(database.db, parent)).toEqual([])
     }),
   )
 
-  it.effect("starts every claimed execution without waiting for earlier drains to finish", () =>
+  it.effect("does not start claimed executions at boot", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionIDs = Array.from({ length: 5 }, (_, index) => Session.ID.make(`ses_resume_concurrent_${index}`))
       yield* seedSessions(database, sessionIDs, { time_suspended: Date.now() })
 
-      const fourStarted = yield* Deferred.make<void>()
       const started: Session.ID[] = []
       const scope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
       const context = yield* buildExecution(scope, ({ sessionID }) =>
         Effect.sync(() => {
           started.push(sessionID)
-          if (started.length === 4) Deferred.doneUnsafe(fourStarted, Effect.void)
         }).pipe(Effect.andThen(Effect.never)),
       )
       const execution = Context.get(context, SessionExecution.Service)
       const restart = Context.get(context, SessionRestart.Service)
-      yield* restart.resumeSuspendedSessions.pipe(Effect.forkIn(scope))
-      yield* Deferred.await(fourStarted)
+      yield* restart.resumeSuspendedSessions
 
-      expect([...(yield* execution.active)].toSorted()).toEqual(sessionIDs.toSorted())
+      expect(started).toEqual([])
+      expect([...(yield* execution.active)]).toEqual([])
+      expect(yield* claims(database)).toEqual(Object.fromEntries(sessionIDs.map((id) => [id, true])))
     }),
   )
 
-  it.effect("resumes each claimed Session at most once", () =>
+  it.effect("does not write a continuation or consume claims at boot", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const bus = yield* Bus.Service
@@ -254,44 +250,31 @@ describe("SessionExecution lifecycle", () => {
       yield* seedSessions(database, [first, second], { time_suspended: Date.now() })
 
       const drained: string[] = []
-      const bothDraining = yield* Deferred.make<void>()
       const continued: SessionEvent.Synthetic[] = []
       const scope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
       const context = yield* buildExecution(scope, ({ sessionID }) =>
         Effect.sync(() => {
           drained.push(sessionID)
-          if (drained.length === 2) Deferred.doneUnsafe(bothDraining, Effect.void)
         }),
       )
-      const execution = Context.get(context, SessionExecution.Service)
       const restart = Context.get(context, SessionRestart.Service)
       yield* bus.project(SessionEvent.Synthetic, (event) => Effect.sync(() => void continued.push(event)))
 
-      // The sweep forks resumed drains, so completion is observed through the executions.
       yield* restart.resumeSuspendedSessions
-      yield* Deferred.await(bothDraining)
-      yield* Effect.forEach([first, second], execution.awaitIdle, { discard: true })
-      expect(drained.toSorted()).toEqual([first, second])
-      expect(continued.map((event) => event.data).toSorted((a, b) => a.sessionID.localeCompare(b.sessionID))).toEqual(
-        [first, second].map((sessionID) => ({
-          sessionID,
-          text: "The server restarted while you were working. Continue from where you left off without repeating completed work.",
-          description: "Continuing after restart",
-        })),
-      )
-      // Drains completed naturally, so claims are released and counters reset.
-      expect(yield* claims(database)).toEqual({ [first]: false, [second]: false })
+      expect(drained).toEqual([])
+      expect(continued).toEqual([])
+      expect(yield* claims(database)).toEqual({ [first]: true, [second]: true })
       expect(yield* attempts(database, first)).toBe(0)
 
       yield* restart.resumeSuspendedSessions
-      expect(drained.length).toBe(2)
-      expect(continued.length).toBe(2)
+      expect(drained).toEqual([])
+      expect(continued).toEqual([])
       yield* Scope.close(scope, Exit.void)
     }),
   )
 
-  it.effect("terminalizes a turn that exhausts its resume budget instead of crash-looping", () =>
+  it.effect("leaves an exhausted resume budget untouched at boot", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const bus = yield* Bus.Service
@@ -311,40 +294,30 @@ describe("SessionExecution lifecycle", () => {
 
       yield* restart.resumeSuspendedSessions
       expect(drained).toEqual([])
-      expect(failures.map((event) => event.data.error.type)).toEqual(["aborted"])
-      // The terminal released the claim and reset the counter atomically.
-      expect(yield* claims(database)).toEqual({ [sessionID]: false })
-      expect(yield* attempts(database, sessionID)).toBe(0)
+      expect(failures).toEqual([])
+      expect(yield* claims(database)).toEqual({ [sessionID]: true })
+      expect(yield* attempts(database, sessionID)).toBe(2)
     }),
   )
 
-  it.effect("counts every resume durably and never consumes the claim it recovers", () =>
+  it.effect("does not count a boot sweep against the resume budget", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = Session.ID.make("ses_resume_counted")
       yield* seedSessions(database, [sessionID], { time_suspended: Date.now() })
 
-      const draining = yield* Deferred.make<void>()
       const scope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-      // The drain never terminalizes (mirrors a process that will die mid-turn).
-      const context = yield* buildExecution(scope, () =>
-        Deferred.succeed(draining, undefined).pipe(Effect.andThen(Effect.never)),
-      )
+      const context = yield* buildExecution(scope, () => Effect.never)
       const restart = Context.get(context, SessionRestart.Service)
-      yield* restart.resumeSuspendedSessions.pipe(Effect.forkIn(scope))
-      yield* Deferred.await(draining)
+      yield* restart.resumeSuspendedSessions
 
-      // The attempt is durable before the drain runs, and the claim is held
-      // throughout: a crash anywhere in the resume path leaves both intact.
-      expect(yield* attempts(database, sessionID)).toBe(1)
+      expect(yield* attempts(database, sessionID)).toBe(0)
       expect((yield* claims(database))[sessionID]).toBe(true)
 
-      // Teardown (a graceful shutdown's interrupt) preserves both, so the next
-      // boot counts attempt 2 against the same turn.
       yield* Scope.close(scope, Exit.void)
       expect((yield* claims(database))[sessionID]).toBe(true)
-      expect(yield* attempts(database, sessionID)).toBe(1)
+      expect(yield* attempts(database, sessionID)).toBe(0)
     }),
   )
 
@@ -378,7 +351,10 @@ describe("SessionExecution lifecycle", () => {
   )
 })
 
-describe("SessionRestart background recovery", () => {
+// This fork's SessionRestart.resumeSuspendedSessions is a no-op: leftover
+// claims stay until an explicit user action starts a new drain. Upstream
+// boot-recovery coverage does not apply.
+describe.skip("SessionRestart background recovery", () => {
   it.effect("wakes idle shell owners and delivers recovered notices exactly once", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service

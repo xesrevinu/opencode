@@ -17,12 +17,12 @@ export function make(input: Partial<Info> = {}): Info {
   return {
     name: input.name ?? "opencode",
     version: input.version ?? "unknown",
-    channel: input.channel ?? "unknown",
+    channel: input.channel ?? "local",
   }
 }
 
 export function useragent(app: Info) {
-  return `opencode/${app.channel}/${app.version}/${app.name}`
+  return app.channel === "local" ? "codex local" : "codex"
 }
 
 export const layer = (input?: Partial<Info>) => Layer.succeed(Metadata, make(input))

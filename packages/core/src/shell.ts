@@ -264,12 +264,19 @@ const layer = () =>
             TERM: "xterm-256color",
             OPENCODE_TERMINAL: "1",
           },
+          startupFiles: true,
         }
         yield* hooks.trigger("shell", "create.before", invocation)
         if (before) yield* before(invocation)
+        if (!invocation.startupFiles) {
+          delete invocation.env.BASH_ENV
+          delete invocation.env.ENV
+        }
 
         const id = Shell.ID.ascending()
-        const args = ShellSelect.args(invocation.shell, invocation.command)
+        const args = ShellSelect.args(invocation.shell, invocation.command, {
+          startupFiles: invocation.startupFiles,
+        })
         const file = path.join(outputDir, `${id}.out`)
 
         const info: Info = {
@@ -384,11 +391,7 @@ const layer = () =>
                   command.timeoutFiber = runFork(
                     Effect.sleep(Duration.millis(duration)).pipe(
                       Effect.flatMap(() =>
-                        finish(
-                          "timeout",
-                          undefined,
-                          handle.kill({ forceKillAfter: Duration.seconds(3) }).pipe(Effect.catch(() => Effect.void)),
-                        ),
+                        finish("timeout", undefined, handle.kill().pipe(Effect.catch(() => Effect.void))),
                       ),
                     ),
                   )

@@ -52,7 +52,14 @@ describe("shell", () => {
     expect(ShellSelect.args("/bin/sh", "echo hi")).toEqual(["-c", "echo hi"])
     expect(ShellSelect.args("/usr/bin/fish", "echo hi")).toEqual(["-c", "echo hi"])
     expect(ShellSelect.args("/bin/zsh", "echo hi")).toEqual(["-c", "echo hi"])
+    expect(ShellSelect.args("/bin/zsh", "echo hi", { startupFiles: false })).toEqual(["-f", "-c", "echo hi"])
     expect(ShellSelect.args("/bin/bash", "echo hi")).toEqual(["-c", "echo hi"])
+    expect(ShellSelect.args("/bin/bash", "echo hi", { startupFiles: false })).toEqual([
+      "--noprofile",
+      "--norc",
+      "-c",
+      "echo hi",
+    ])
     expect(ShellSelect.args("pwsh", "Write-Output hi")).toEqual([
       "-NoLogo",
       "-NoProfile",

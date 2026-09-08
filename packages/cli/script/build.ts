@@ -131,6 +131,7 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
     bytecode: true,
     sourcemap: Script.channel === "dev" || Script.channel === "local" ? "inline" : "none",
     splitting: true,
+    conditions: ["browser", "bun", "node"],
     compile: {
       autoloadBunfig: false,
       autoloadDotenv: false,

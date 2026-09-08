@@ -22,6 +22,14 @@ const WEBSOCKET_ROTATE_AFTER_MS = 55 * 60 * 1000
 export const DEFAULT_BASE_URL = "https://api.openai.com/v1"
 export const PATH = OpenResponses.PATH
 
+export const supportsSessionRouting = (baseURL: string | undefined) => {
+  if (baseURL === undefined) return true
+  return (
+    /^https:\/\/api\.openai\.com(?:\/|$)/.test(baseURL) ||
+    /^https:\/\/chatgpt\.com\/backend-api\/codex(?:\/|$)/.test(baseURL)
+  )
+}
+
 export const ContextManagement = Schema.Array(
   Schema.Struct({
     type: Schema.Literal("compaction"),

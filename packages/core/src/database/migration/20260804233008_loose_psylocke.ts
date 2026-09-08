@@ -1,41 +1,31 @@
-import { Effect } from "effect"
 import { sql } from "drizzle-orm"
+import { Effect } from "effect"
 import type { DatabaseMigration } from "../migration.js"
-
-const previousV2Marker = "20260730195856_optional_session_title"
 
 const migration: DatabaseMigration.Migration = {
   id: "20260804233008_loose_psylocke",
   up(tx) {
     return Effect.gen(function* () {
-      // This marker identifies the completed pre-split V2 lineage. Its V2 tables
-      // are canonical, so rename them in place instead of replaying the V1 squash.
-      if (yield* tx.get(sql`SELECT id FROM migration WHERE id = ${previousV2Marker}`)) {
-        const v1Only = yield* tx.get(sql`
-          SELECT 1
-          FROM message
-          WHERE NOT EXISTS (
-            SELECT 1 FROM session_message WHERE session_message.session_id = message.session_id
-          )
-          LIMIT 1
-        `)
-        if (v1Only) return yield* Effect.die(new Error("Previous V2 database contains V1-only session history"))
-
-        yield* tx.run(`DROP INDEX IF EXISTS \`session_project_idx\`;`)
-        yield* tx.run(`DROP INDEX IF EXISTS \`session_workspace_idx\`;`)
-        yield* tx.run(`DROP INDEX IF EXISTS \`session_parent_idx\`;`)
-        yield* tx.run(`DROP INDEX IF EXISTS \`session_time_suspended_idx\`;`)
-        yield* tx.run(`ALTER TABLE \`session\` RENAME TO \`session_v2\`;`)
-        yield* tx.run(`CREATE INDEX \`session_v2_project_idx\` ON \`session_v2\` (\`project_id\`);`)
-        yield* tx.run(`CREATE INDEX \`session_v2_workspace_idx\` ON \`session_v2\` (\`workspace_id\`);`)
-        yield* tx.run(`CREATE INDEX \`session_v2_parent_idx\` ON \`session_v2\` (\`parent_id\`);`)
-        yield* tx.run(
-          `CREATE INDEX \`session_v2_time_suspended_idx\` ON \`session_v2\` (\`time_suspended\`) WHERE "session_v2"."time_suspended" is not null;`,
+      const tables = new Set(
+        (yield* tx.all<{ name: string }>(sql`SELECT name FROM sqlite_master WHERE type = 'table'`)).map(
+          (row) => row.name,
+        ),
+      )
+      const columns = (table: string) =>
+        tx.all<{ name: string }>(sql`SELECT name FROM pragma_table_info(${table})`).pipe(
+          Effect.map((rows) => new Set(rows.map((row) => row.name))),
         )
-        yield* tx.run(`DROP TABLE IF EXISTS \`data_migration\`;`)
-        yield* tx.run(`DROP TABLE IF EXISTS \`session_context_epoch\`;`)
-        yield* tx.run(`DROP TABLE IF EXISTS \`session_input\`;`)
-        return
+
+      // Incremental installs kept the pre-rename `session` table and already have
+      // `event.created` from 20260703181610. The generated snapshot assumed both
+      // were still outstanding and would otherwise add a duplicate column, then
+      // drop live session_message rows while creating an empty session_v2.
+      if (tables.has("session") && !tables.has("session_v2")) {
+        // Partial indexes that quote the old table name cannot survive RENAME.
+        yield* tx.run("DROP INDEX IF EXISTS `session_time_suspended_idx`")
+        yield* tx.run("ALTER TABLE `session` RENAME TO `session_v2`")
+        tables.delete("session")
+        tables.add("session_v2")
       }
 
       yield* tx.run(`
@@ -123,8 +113,20 @@ const migration: DatabaseMigration.Migration = {
           CONSTRAINT \`fk_session_v2_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
         );
       `)
-      yield* tx.run(`ALTER TABLE \`event\` ADD \`created\` integer DEFAULT 0 NOT NULL;`)
-      yield* tx.run(`
+      if (!(yield* columns("event")).has("created"))
+        yield* tx.run("ALTER TABLE `event` ADD `created` integer DEFAULT 0 NOT NULL")
+
+      const messageColumns = tables.has("session_message") ? yield* columns("session_message") : new Set<string>()
+      const messageReady =
+        messageColumns.has("id") &&
+        messageColumns.has("session_id") &&
+        messageColumns.has("type") &&
+        messageColumns.has("seq") &&
+        messageColumns.has("time_created") &&
+        messageColumns.has("time_updated") &&
+        messageColumns.has("data")
+      if (!messageReady) {
+        yield* tx.run(`
         CREATE TABLE IF NOT EXISTS \`__new_session_message\` (
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,
@@ -136,36 +138,37 @@ const migration: DatabaseMigration.Migration = {
           CONSTRAINT \`fk_session_message_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
         );
       `)
-      yield* tx.run(`DROP TABLE \`session_message\`;`)
-      yield* tx.run(`ALTER TABLE \`__new_session_message\` RENAME TO \`session_message\`;`)
+        yield* tx.run("DROP TABLE IF EXISTS `session_message`")
+        yield* tx.run("ALTER TABLE `__new_session_message` RENAME TO `session_message`")
+      }
       yield* tx.run(
-        `CREATE UNIQUE INDEX \`session_message_session_seq_idx\` ON \`session_message\` (\`session_id\`,\`seq\`);`,
+        "CREATE UNIQUE INDEX IF NOT EXISTS `session_message_session_seq_idx` ON `session_message` (`session_id`,`seq`)",
       )
       yield* tx.run(
-        `CREATE INDEX \`session_message_session_type_seq_idx\` ON \`session_message\` (\`session_id\`,\`type\`,\`seq\`);`,
+        "CREATE INDEX IF NOT EXISTS `session_message_session_type_seq_idx` ON `session_message` (`session_id`,`type`,`seq`)",
       )
       yield* tx.run(
-        `CREATE INDEX \`session_message_session_time_created_id_idx\` ON \`session_message\` (\`session_id\`,\`time_created\`,\`id\`);`,
+        "CREATE INDEX IF NOT EXISTS `session_message_session_time_created_id_idx` ON `session_message` (`session_id`,`time_created`,`id`)",
       )
-      yield* tx.run(`CREATE INDEX \`session_message_time_created_idx\` ON \`session_message\` (\`time_created\`);`)
+      yield* tx.run("CREATE INDEX IF NOT EXISTS `session_message_time_created_idx` ON `session_message` (`time_created`)")
       yield* tx.run(
-        `CREATE INDEX \`session_pending_session_delivery_seq_idx\` ON \`session_pending\` (\`session_id\`,\`delivery\`,\`admitted_seq\`);`,
-      )
-      yield* tx.run(
-        `CREATE UNIQUE INDEX \`session_pending_session_compaction_idx\` ON \`session_pending\` (\`session_id\`) WHERE "session_pending"."type" = 'compaction';`,
+        "CREATE INDEX IF NOT EXISTS `session_pending_session_delivery_seq_idx` ON `session_pending` (`session_id`,`delivery`,`admitted_seq`)",
       )
       yield* tx.run(
-        `CREATE UNIQUE INDEX \`session_pending_session_admitted_seq_idx\` ON \`session_pending\` (\`session_id\`,\`admitted_seq\`);`,
+        "CREATE UNIQUE INDEX IF NOT EXISTS `session_pending_session_compaction_idx` ON `session_pending` (`session_id`) WHERE \"session_pending\".\"type\" = 'compaction'",
       )
-      yield* tx.run(`CREATE INDEX \`session_v2_project_idx\` ON \`session_v2\` (\`project_id\`);`)
-      yield* tx.run(`CREATE INDEX \`session_v2_workspace_idx\` ON \`session_v2\` (\`workspace_id\`);`)
-      yield* tx.run(`CREATE INDEX \`session_v2_parent_idx\` ON \`session_v2\` (\`parent_id\`);`)
       yield* tx.run(
-        `CREATE INDEX \`session_v2_time_suspended_idx\` ON \`session_v2\` (\`time_suspended\`) WHERE "session_v2"."time_suspended" is not null;`,
+        "CREATE UNIQUE INDEX IF NOT EXISTS `session_pending_session_admitted_seq_idx` ON `session_pending` (`session_id`,`admitted_seq`)",
       )
-      yield* tx.run(`DROP TABLE \`data_migration\`;`)
-      yield* tx.run(`DROP TABLE \`session_context_epoch\`;`)
-      yield* tx.run(`DROP TABLE \`session_input\`;`)
+      yield* tx.run("CREATE INDEX IF NOT EXISTS `session_v2_project_idx` ON `session_v2` (`project_id`)")
+      yield* tx.run("CREATE INDEX IF NOT EXISTS `session_v2_workspace_idx` ON `session_v2` (`workspace_id`)")
+      yield* tx.run("CREATE INDEX IF NOT EXISTS `session_v2_parent_idx` ON `session_v2` (`parent_id`)")
+      yield* tx.run(
+        "CREATE INDEX IF NOT EXISTS `session_v2_time_suspended_idx` ON `session_v2` (`time_suspended`) WHERE \"session_v2\".\"time_suspended\" is not null",
+      )
+      yield* tx.run("DROP TABLE IF EXISTS `data_migration`")
+      yield* tx.run("DROP TABLE IF EXISTS `session_context_epoch`")
+      yield* tx.run("DROP TABLE IF EXISTS `session_input`")
     })
   },
 }

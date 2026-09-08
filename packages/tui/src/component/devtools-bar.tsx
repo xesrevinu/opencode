@@ -345,6 +345,7 @@ export function DevToolsBar() {
             <PanelTitle>Theme</PanelTitle>
             <Row label="Name" value={themes.selected} />
             <Row label="Mode" value={mode()} />
+            <Row label="Transparent" value={themes.transparent() ? "on" : "off"} />
             <For each={themePerformance()}>{(entry) => <Row label={entry.key} value={String(entry.value)} />}</For>
             <Show when={canSwitchMode()}>
               <Action onClick={() => setMode(nextMode())} hoverBackground>

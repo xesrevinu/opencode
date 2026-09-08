@@ -121,6 +121,9 @@ function endpoint(input: Config, modelID: string | ModelID) {
   if (input.baseURL !== undefined && !new URL(input.baseURL).hostname.endsWith(".openai.azure.com")) {
     return { baseURL, query: input.queryParams }
   }
+  if (input.baseURL !== undefined && new URL(input.baseURL).pathname.replace(/\/+$/, "").endsWith("/v1")) {
+    return { baseURL, query }
+  }
   return { baseURL: `${baseURL}/v1`, query }
 }
 
