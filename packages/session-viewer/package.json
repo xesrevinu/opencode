@@ -5,17 +5,23 @@
   "private": true,
   "type": "module",
   "license": "MIT",
+  "bin": {
+    "session-viewer": "./src/bin.ts"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./tui": "./src/tui/run.tsx"
   },
   "scripts": {
+    "start": "bun run src/bin.ts",
+    "dev": "bun --watch run src/bin.ts",
     "test": "bun test --timeout 30000 --only-failures",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
     "@opentui/core": "catalog:",
     "@opentui/solid": "catalog:",
+    "effect": "catalog:",
     "solid-js": "catalog:"
   },
   "devDependencies": {
