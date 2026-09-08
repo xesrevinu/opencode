@@ -14,7 +14,7 @@
 
 | 分支 | 基线 | 内容 |
 | --- | --- | --- |
-| `v2` | `upstream/v2` | fork 核心定制（compaction、shell 环境、provider profiles 等），**不含**本地 package |
+| `v2` | `upstream/v2` | fork 核心定制（shell 环境、provider profiles 等），**不含**本地 package |
 | `fun-apps` | `v2` | 本地 package 栈：`packages/session-viewer` 及后续自研 package |
 
 `v2` 跟踪 `upstream/v2`。短期功能分支验证后合并/快进到 `v2`；fork 核心改动**始终 rebase 到上游之上**，不做 merge 上游，保持线性历史。
