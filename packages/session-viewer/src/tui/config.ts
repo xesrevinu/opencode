@@ -1,5 +1,5 @@
-import { Info, type Interface } from "@opencode-ai/tui/config"
-import { Global } from "@opencode-ai/util/global"
+import { Info, type Interface } from "@opencode/tui/config"
+import { Global } from "@opencode/util/global"
 import { Option, Schema } from "effect"
 import { applyEdits, modify, parse, type ParseError } from "jsonc-parser"
 import { mkdir } from "node:fs/promises"

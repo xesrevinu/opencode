@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js"
 import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { useTheme } from "@opencode-ai/tui/context/theme"
+import { useTheme } from "@opencode/tui/context/theme"
 import { windowCatalogRows, type CatalogRow } from "../catalog"
 import type { Catalog, SessionFilter } from "../model"
 import { AGENT_LABEL, type AgentKind } from "../model"

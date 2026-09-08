@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
-import { Global } from "@opencode-ai/util/global"
+import { Global } from "@opencode/util/global"
 import { cliConfigPath, createCliConfigService } from "../src/tui/config"
 import { defaultHomes } from "../src/homes"
 import { tempRoot } from "./helpers"

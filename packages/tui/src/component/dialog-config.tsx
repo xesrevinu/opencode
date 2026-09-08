@@ -87,6 +87,14 @@ export const settings: Setting[] = [
     keywords: ["reasoning", "chain of thought"],
   },
   {
+    title: "Tools",
+    category: "Session",
+    path: ["session", "tools"],
+    default: "hide",
+    values: ["hide", "show"],
+    keywords: ["tool calls", "tool output", "expand"],
+  },
+  {
     title: "Markdown",
     category: "Session",
     path: ["session", "markdown"],
@@ -332,13 +340,17 @@ export function settingID(setting: Setting) {
   return setting.path.join(".")
 }
 
-export function DialogConfig(props: { current?: string }) {
+export function DialogConfig(props: { current?: string; include?: readonly string[] }) {
   const config = useConfig()
   const toast = useToast()
   const themes = useThemes()
+  const visible = createMemo(() => {
+    const include = props.include
+    return include ? settings.filter((setting) => include.includes(settingID(setting))) : settings
+  })
   const current = Math.max(
     0,
-    settings.findIndex((setting) => settingID(setting) === props.current),
+    visible().findIndex((setting) => settingID(setting) === props.current),
   )
   const [selected, setSelected] = createSignal(current)
   const [saving, setSaving] = createSignal(false)
@@ -362,7 +374,7 @@ export function DialogConfig(props: { current?: string }) {
     return index === undefined || index < 0 ? String(current) : (setting.labels?.[index] ?? String(current))
   }
   const options = createMemo(() =>
-    settings.map((setting, index) => ({
+    visible().map((setting, index) => ({
       title: setting.title,
       category: setting.category,
       searchText: setting.keywords?.join(" "),
@@ -373,7 +385,8 @@ export function DialogConfig(props: { current?: string }) {
 
   async function change(direction: number, index = selected()) {
     if (saving()) return
-    const setting = settings[index]
+    const setting = visible()[index]
+    if (!setting) return
     const current = value(setting)
     const choices = values(setting)
     const next = choices

@@ -4,7 +4,7 @@ import type {
   SessionMessageAssistantTool,
   SessionMessageInfo,
   SessionMessageUser,
-} from "@opencode-ai/client"
+} from "@opencode/client"
 import type { SessionTranscript, TranscriptPart } from "./model"
 import { displayUserText, titleFromText } from "./text"
 

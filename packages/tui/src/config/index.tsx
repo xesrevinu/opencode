@@ -156,6 +156,9 @@ export const Info = Schema.Struct({
       thinking: Schema.optional(Schema.Literals(["show", "hide"])).annotate({
         description: "Show or hide model reasoning by default",
       }),
+      tools: Schema.optional(Schema.Literals(["show", "hide"])).annotate({
+        description: "Show or hide tool output by default",
+      }),
       grouping: Schema.optional(Schema.Literals(["auto", "none"])).annotate({
         description: "Group related transcript items automatically or render each item separately",
       }),

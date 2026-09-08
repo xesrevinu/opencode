@@ -268,6 +268,8 @@ describe("adapters", () => {
   })
 
   test("reads OpenCode sqlite sessions and pending live flags", async () => {
+    const previous = process.env.OPENCODE_DB
+    delete process.env.OPENCODE_DB
     const root = await tempRoot("opencode")
     const file = path.join(root, "opencode-v2.db")
     const db = new Database(file)
@@ -327,16 +329,21 @@ describe("adapters", () => {
     ])
     db.close()
 
-    const listed = await listOpencode(root, now)
-    expect(listed[0]).toMatchObject({
-      id: "ses_1",
-      title: "Check upstream",
-      model: "SubGrok/grok-4.6",
-      live: true,
-    })
-    const transcript = await loadOpencode(listed[0]!)
-    expect(transcript.parts.map((part) => part.type)).toEqual(["user", "assistant", "tool"])
-    expect(transcript.parts[2]).toMatchObject({ name: "read", output: "# docs", status: "completed" })
+    try {
+      const listed = await listOpencode(root, now)
+      expect(listed[0]).toMatchObject({
+        id: "ses_1",
+        title: "Check upstream",
+        model: "SubGrok/grok-4.6",
+        live: true,
+      })
+      const transcript = await loadOpencode(listed[0]!)
+      expect(transcript.parts.map((part) => part.type)).toEqual(["user", "assistant", "tool"])
+      expect(transcript.parts[2]).toMatchObject({ name: "read", output: "# docs", status: "completed" })
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_DB
+      else process.env.OPENCODE_DB = previous
+    }
   })
 
   test("OPENCODE_DB selects one sqlite file relative to the OpenCode data directory", async () => {
@@ -356,11 +363,18 @@ describe("adapters", () => {
   })
 
   test("OPENCODE_DB can be an absolute sqlite path", () => {
-    const file = "/tmp/opencode-v2.db"
-    expect(resolveOpencodeDatabasePath("/ignored", file)).toBe(file)
-    expect(resolveOpencodeDatabasePath("/data", "opencode-v2.db")).toBe(path.join("/data", "opencode-v2.db"))
-    expect(resolveOpencodeDatabasePath("/data", undefined)).toBeUndefined()
-    expect(resolveOpencodeDatabasePath("/data", ":memory:")).toBeUndefined()
+    const previous = process.env.OPENCODE_DB
+    delete process.env.OPENCODE_DB
+    try {
+      const file = "/tmp/opencode-v2.db"
+      expect(resolveOpencodeDatabasePath("/ignored", file)).toBe(file)
+      expect(resolveOpencodeDatabasePath("/data", "opencode-v2.db")).toBe(path.join("/data", "opencode-v2.db"))
+      expect(resolveOpencodeDatabasePath("/data")).toBeUndefined()
+      expect(resolveOpencodeDatabasePath("/data", ":memory:")).toBeUndefined()
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_DB
+      else process.env.OPENCODE_DB = previous
+    }
   })
 
   test("reads Cursor agent transcripts and skips subagents", async () => {
@@ -556,6 +570,9 @@ describe("adapters", () => {
 
   test("reuses list stamps without walking or reopening sqlite", async () => {
     resetListCache()
+    const previous = process.env.OPENCODE_DB
+    delete process.env.OPENCODE_DB
+    try {
     const root = await tempRoot("list-cache")
     const dbFile = path.join(root, "opencode", "opencode-v2.db")
     await mkdir(path.dirname(dbFile), { recursive: true })
@@ -593,6 +610,10 @@ describe("adapters", () => {
         expect(walks.filter((dir) => dir.includes(`${path.sep}codex${path.sep}sessions`))).toHaveLength(1)
       },
     )
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_DB
+      else process.env.OPENCODE_DB = previous
+    }
   })
 
   test("agent filter skips Cursor and OpenCode stores", async () => {

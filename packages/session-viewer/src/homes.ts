@@ -1,5 +1,5 @@
 import path from "node:path"
-import { Global } from "@opencode-ai/util/global"
+import { Global } from "@opencode/util/global"
 import { AGENTS, type AgentHomes, type AgentKind } from "./model"
 
 export function defaultHomes(root = Global.Path.home): Required<AgentHomes> {
